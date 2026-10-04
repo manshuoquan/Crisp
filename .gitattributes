@@ -1,0 +1,29 @@
+# CRISP .gitattributes
+# Line endings: LF for all text files (AGENTS.md rule).
+* text=auto eol=lf
+
+# Source files - force LF, UTF-8.
+*.h   text eol=lf
+*.hpp text eol=lf
+*.c   text eol=lf
+*.cc  text eol=lf
+*.cpp text eol=lf
+*.cxx text eol=lf
+*.inl text eol=lf
+*.md  text eol=lf
+*.txt text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+
+# Build artifacts / logs / archives - never tracked.
+build/        export-ignore
+qtbase-everywhere-src-6.2.4/ export-ignore
+*.tar.xz      binary -delta
+*.tar.gz      binary -delta
+*.log         text eol=lf
+
+# Binary files.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

@@ -1,0 +1,69 @@
+#!/bin/sh
+# CRISP commit-msg gate: enforce commit message format.
+#
+# Rules (from AGENTS.md English-comment culture):
+#   1. First line (subject) <= 72 characters.
+#   2. Subject must start with a conventional commit prefix:
+#      feat: / fix: / refactor: / docs: / test: / build: / chore: / perf: / revert:
+#   3. No trailing whitespace on any line.
+#   4. Body lines (if any) <= 100 characters.
+#   5. Non-ASCII characters in the commit message are rejected (English only).
+
+set -u
+
+# shellcheck disable=SC2039,SC3043
+fail=0
+error() { printf '[commit-msg] ERROR: %s\n' "$1" >&2; fail=1; }
+
+msg_file="$1"
+[ -f "$msg_file" ] || { echo "[commit-msg] commit message file missing" >&2; exit 1; }
+
+# shellcheck disable=SC2039,SC3043
+subject=""
+subject=$(sed -n '1p' "$msg_file")
+
+# Remove comment lines git may insert.
+subject_clean=$(printf '%s' "$subject" | sed 's/^#.*//')
+
+# 1. Subject length.
+len=$(printf '%s' "$subject_clean" | wc -c | tr -d ' ')
+if [ "$len" -gt 72 ]; then
+    error "subject is $len chars (max 72): $subject_clean"
+fi
+
+# 2. Conventional commit prefix.
+case "$subject_clean" in
+    feat:*|fix:*|refactor:*|docs:*|test:*|build:*|chore:*|perf:*|revert:*)
+        ;;
+    *)
+        error "subject must start with feat:/fix:/refactor:/docs:/test:/build:/chore:/perf:/revert:  (got: $subject_clean)"
+        ;;
+esac
+
+# 3. Trailing whitespace anywhere.
+if grep -n '[[:blank:]]$' "$msg_file" >/dev/null 2>&1; then
+    error "trailing whitespace found in commit message:"
+    grep -n '[[:blank:]]$' "$msg_file" >&2
+fi
+
+# 4. Body line length.
+awk 'NR>1 && length($0) > 100 && $0 !~ /^#/ { print NR": "length($0)" chars" }' "$msg_file" >/dev/null 2>&1
+long_lines=$(awk 'NR>1 && length($0) > 100 && $0 !~ /^#/ { print NR": "$0 }' "$msg_file")
+if [ -n "$long_lines" ]; then
+    error "body lines exceed 100 chars:"
+    printf '%s\n' "$long_lines" >&2
+fi
+
+# 5. Non-ASCII characters.
+if LC_ALL=C grep -q '[^ -~]' "$msg_file" 2>/dev/null; then
+    error "non-ASCII characters in commit message (English only, per project rule)"
+fi
+
+if [ "$fail" -ne 0 ]; then
+    info="fix the commit message and re-commit, or use 'git commit --no-verify' to bypass"
+    printf '[commit-msg] %s\n' "$info" >&2
+    exit 1
+fi
+
+printf '[commit-msg] ok\n'
+exit 0

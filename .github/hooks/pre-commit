@@ -1,0 +1,157 @@
+#!/bin/sh
+# CRISP pre-commit gate: code-style preflight + large-file protection + optional build check.
+#
+# Hard rules from AGENTS.md (fail commit):
+#   1. UTF-8 without BOM for all source files.
+#   2. No CRLF in source files (LF required).
+#   3. No non-ASCII characters embedded in source code (use u8"..." or escapes).
+#   4. No std::filesystem (MinGW 8.1 libstdc++ bug) - forbidden in src/tests.
+#   5. No Qt source tree / archives / build artifacts staged.
+#   6. No file with space or non-ASCII characters in its name.
+#
+# Optional (skipped unless enabled): full build verification.
+#   Enable by:  git config hooks.buildGate 1   (or --bool true)
+#
+# All checks run on staged files only. Use `git commit --no-verify` to bypass
+# intentionally (not recommended).
+
+set -u
+
+# shellcheck disable=SC2039,SC3043
+fail=0
+info()  { printf '[pre-commit] %s\n' "$1"; }
+warn()  { printf '[pre-commit] WARN: %s\n' "$1"; }
+error() { printf '[pre-commit] ERROR: %s\n' "$1"; fail=1; }
+
+# ---------------------------------------------------------------
+# 0. Collect staged files (renames/copies handled by -z diff).
+# ---------------------------------------------------------------
+# shellcheck disable=SC2039,SC3043
+staged=""
+if ! staged=$(git diff --cached --name-only -z); then
+    error "failed to list staged files"
+    exit 1
+fi
+
+# Convert NUL-separated list to newline-separated for shell processing.
+# shellcheck disable=SC2039,SC3043
+files=""
+if [ -n "$staged" ]; then
+    files=$(printf '%s' "$staged" | tr '\0' '\n')
+fi
+
+# ---------------------------------------------------------------
+# 1. File-name check: no spaces, no non-ASCII characters.
+# ---------------------------------------------------------------
+if [ -n "$files" ]; then
+    bad_names=$(printf '%s\n' "$files" | grep -n '[[:space:][:cntrl:][^ -~]]' || true)
+    if [ -n "$bad_names" ]; then
+        error "staged file names contain spaces or non-ASCII characters:"
+        printf '%s\n' "$bad_names"
+    fi
+fi
+
+# ---------------------------------------------------------------
+# 2. Large-file / forbidden-path protection.
+# ---------------------------------------------------------------
+if [ -n "$files" ]; then
+    # Qt source tree, build dirs, archives, logs, temp files must never be staged.
+    forbidden=$(printf '%s\n' "$files" | grep -E '(^|/)(build|\.git)/|\.tar\.(xz|gz|bz2)$|(qtbase-everywhere-src|qt-.*-build\.log|qt-build[0-9]*\.log|qt-install\.log|qt-hello/)$' || true)
+    if [ -n "$forbidden" ]; then
+        error "forbidden files staged (build artifacts / Qt sources / archives / logs):"
+        printf '%s\n' "$forbidden"
+    fi
+fi
+
+# ---------------------------------------------------------------
+# 3. Source-content checks (UTF-8 no BOM, CRLF, non-ASCII, std::filesystem).
+# ---------------------------------------------------------------
+# shellcheck disable=SC2039,SC3043
+src_files=""
+if [ -n "$files" ]; then
+    src_files=$(printf '%s\n' "$files" | grep -E '\.(h|hpp|c|cc|cpp|cxx|inl)$' || true)
+fi
+
+if [ -n "$src_files" ]; then
+    # 3a. BOM check (first 3 bytes EF BB BF).
+    # shellcheck disable=SC2039,SC3043
+    bom_files=""
+    for f in $src_files; do
+        if [ -f "$f" ]; then
+            head -c 3 "$f" | od -An -tx1 | grep -q 'ef bb bf' && bom_files="$bom_files $f"
+        fi
+    done
+    if [ -n "$bom_files" ]; then
+        error "UTF-8 BOM detected (must be no BOM):"
+        printf '%s\n' "$bom_files"
+    fi
+
+    # 3b. CRLF check (carriage return before LF).
+    # shellcheck disable=SC2039,SC3043
+    crlf_files=""
+    for f in $src_files; do
+        if [ -f "$f" ]; then
+            grep -lU $'\r$' "$f" >/dev/null 2>&1 && crlf_files="$crlf_files $f"
+        fi
+    done
+    if [ -n "$crlf_files" ]; then
+        error "CRLF line endings detected (LF required):"
+        printf '%s\n' "$crlf_files"
+    fi
+
+    # 3c. Non-ASCII characters in source (bytes >= 0x80 outside UTF-8 multibyte strings).
+    #     Simple heuristic: any byte >= 0x80 in .h/.cpp is suspect.
+    # shellcheck disable=SC2039,SC3043
+    nonascii_files=""
+    for f in $src_files; do
+        if [ -f "$f" ]; then
+            # LC_ALL=C makes grep byte-oriented.
+            if LC_ALL=C grep -q '[^ -~]' "$f" 2>/dev/null; then
+                nonascii_files="$nonascii_files $f"
+            fi
+        fi
+    done
+    if [ -n "$nonascii_files" ]; then
+        error "non-ASCII characters detected in source (use u8\"...\" or escapes):"
+        printf '%s\n' "$nonascii_files"
+    fi
+
+    # 3d. std::filesystem forbidden (MinGW 8.1 libstdc++ bug).
+    # shellcheck disable=SC2039,SC3043
+    fs_files=""
+    for f in $src_files; do
+        if [ -f "$f" ]; then
+            grep -q 'std::filesystem' "$f" 2>/dev/null && fs_files="$fs_files $f"
+        fi
+    done
+    if [ -n "$fs_files" ]; then
+        error "std::filesystem is forbidden (MinGW 8.1 bug), use Qt path APIs or helper layer:"
+        printf '%s\n' "$fs_files"
+    fi
+fi
+
+# ---------------------------------------------------------------
+# 4. Optional build gate (requires hooks.buildGate = true).
+# ---------------------------------------------------------------
+build_gate=$(git config --bool hooks.buildGate 2>/dev/null || echo "false")
+if [ "$build_gate" = "true" ]; then
+    info "build gate enabled: running cmake build (parallel 2, MinGW 32-bit)"
+    if [ ! -d build ]; then
+        warn "no build dir; running configure first"
+        cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+    fi
+    if ! cmake --build build --parallel 2; then
+        error "build gate failed - cmake --build reported errors"
+    fi
+fi
+
+# ---------------------------------------------------------------
+# Verdict
+# ---------------------------------------------------------------
+if [ "$fail" -ne 0 ]; then
+    info "commit blocked. Fix the issues above, or use 'git commit --no-verify' to bypass (not recommended)."
+    exit 1
+fi
+
+info "all checks passed"
+exit 0

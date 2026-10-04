@@ -1,0 +1,35 @@
+# CRISP .gitignore
+
+# Build output
+/build/
+qt-hello/build/
+qt-hello/*.log
+
+# Scratch / session temp files
+/tmp/
+
+# Qt source tree & archives (third-party, not part of the project)
+/qtbase-everywhere-src-6.2.4/
+qt-6.2.4-src.tar.xz
+
+# Logs
+*.log
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
+# IDE / editor
+.vscode/
+*.user
+*.suo
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
