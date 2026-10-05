@@ -328,4 +328,100 @@ TEST_CASE(m2_manual_source_injects_exactly_once)
     EXPECT_EQ(queue.front(pe), false);
 }
 
+// --- manual source end-to-end through the loop (§13.3 #6) -------------------
+
+TEST_CASE(m2_manual_source_drains_through_loop_to_handler)
+{
+    auto dispatcher = std::make_shared<TestDispatcher>();
+    auto receiver = makeReceiver();
+
+    int timerCalls = 0;
+    auto tTimer = dispatcher->addHandler<CtTimerPayload>(
+        receiver, [&](CtEvent<CtTimerPayload>& ev) {
+            ++timerCalls;
+            ev.accept();
+        });
+
+    // Attach a manual source that injects ONE timer event, then run the
+    // loop: the source's poll() runs inside exec(), the event lands in the
+    // queue, and the drain dispatches it to the handler.
+    CtEventLoop loop;
+    loop.attachToCurrentThread();
+    loop.setDispatcher(dispatcher);
+
+    auto source = std::make_shared<ManualEventSource<TestEventSet>>(
+        CtEvent<CtTimerPayload>(CtEventOrigin::kApplication, CtTimerPayload{5}));
+    EXPECT_EQ(loop.attachSource(source), true);
+    EXPECT_EQ(source->activate(), true);
+
+    // exec() first drains (empty), then polls the source (enqueues), then
+    // drains again. Quit after a short delay so the loop has time for both.
+    std::thread quitter([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        loop.quit();
+    });
+    loop.exec();
+    quitter.join();
+
+    EXPECT_EQ(timerCalls, 1); // manual event reached the handler via the loop
+}
+
+// --- exec thread-affinity assertion (§13.3 #2) -----------------------------
+
+TEST_CASE(m2_exec_on_wrong_thread_asserts_fails_release_degrades)
+{
+    auto dispatcher = std::make_shared<TestDispatcher>();
+    CtEventLoop loop;
+    loop.attachToCurrentThread(); // THIS thread is the loop's affinity
+    loop.setDispatcher(dispatcher);
+
+    // A different thread calls exec(): in a release build the affinity
+    // assert degrades and exec returns 0 immediately.
+    int execResult = -1;
+    std::thread t([&] {
+        execResult = loop.exec(); // wrong thread (release: returns 0)
+    });
+    t.join();
+
+    // Debug builds abort on the assert; release returns 0 (degraded).
+    EXPECT_EQ(execResult, 0);
+}
+
+// --- queue overflow: drop-tail + reported via popDropped (§13.3 #3) ---------
+
+TEST_CASE(m2_queue_overflow_drops_tail_and_reports)
+{
+    TestQueue queue;
+    auto receiver = makeReceiver();
+
+    // Fill the queue past kMaxQueued (8192). Drop-tail policy: the NEW event
+    // is always accepted (push returns true); the OLDEST lowest-priority
+    // tail is evicted and counted. All pushes report accepted.
+    constexpr std::size_t kMax = 8192;
+    std::size_t accepted = 0;
+    for (std::size_t i = 0; i <= kMax; ++i) { // 8193 pushes
+        CtEvent<MousePayload> ev(CtEventOrigin::kApplication,
+                                 MousePayload{static_cast<int>(i), 0});
+        if (queue.push(std::weak_ptr<CtReceiver>(receiver), std::move(ev)))
+            ++accepted;
+    }
+    EXPECT_EQ(accepted, kMax + 1); // all 8193 accepted (drop-tail policy)
+    EXPECT_EQ(queue.size(), kMax); // one evicted from the tail
+
+    // The drop is reported by the affinity thread via popDropped().
+    const std::size_t dropped = queue.popDropped();
+    EXPECT_EQ(dropped, 1u);
+}
+
+// --- queue closed: push rejected (§10.1 契约 #3) ---------------------------
+
+TEST_CASE(m2_closed_queue_rejects_pushes)
+{
+    TestQueue queue;
+    queue.close();
+
+    CtEvent<MousePayload> ev(CtEventOrigin::kApplication, MousePayload{1, 1});
+    EXPECT_EQ(queue.push(std::weak_ptr<CtReceiver>{}, std::move(ev)), false);
+}
+
 } // namespace (anonymous)

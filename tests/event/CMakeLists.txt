@@ -3,6 +3,7 @@
 # ---------------------------------------------------------------------------
 add_executable(event_tests
     main.cpp
+    test_allocation.cpp
     test_ct_event.cpp
     test_ct_dispatcher.cpp
     test_ct_queue.cpp
