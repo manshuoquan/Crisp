@@ -2,6 +2,9 @@
 
 # Build output
 /build/
+
+# Qt hello-world verification (not part of CRISP)
+/qt-hello/
 qt-hello/build/
 qt-hello/*.log
 
