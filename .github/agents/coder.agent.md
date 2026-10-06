@@ -1,7 +1,7 @@
 ---
 description: "编码实现（Coder）。Use when: 需要把架构设计落地方案、编写 C++ 代码、实现类/模块/接口、根据设计文档写 src 与 tests 代码、修复编译错误。负责 CRISP 项目的编码实现。"
 name: "编码子agent"
-tools: [read, search, edit]
+tools: [read, search, edit, create]
 user-invocable: false
 agents: []
 ---

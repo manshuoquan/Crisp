@@ -1,7 +1,7 @@
 ---
 description: "架构设计（Architect）。Use when: 需要分析 Qt 架构、设计项目整体架构、制定模块划分、编写架构/设计文档、规划分层与接口、评估技术选型、把需求转化为设计。负责 CRISP 项目全局架构与事件系统的设计产出。"
 name: "架构设计子agent"
-tools: [read, search, edit]
+tools: [read, search, edit, create, glob]
 user-invocable: false
 agents: []
 ---
