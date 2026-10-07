@@ -170,6 +170,18 @@ public:
     /// for the reported count (affinity thread).
     virtual std::size_t popDropped() = 0;
 
+    /// Record an async-path drop in the queue's own trace (affinity
+    /// thread). Called by event sources whose poll() rejects an event
+    /// BEFORE it enters the queue (e.g. an unregistered Qt translator in
+    /// the M3 bridge, §3.3 contract #5): the drop is a real observable
+    /// loss, so it must be visible in the queue trace — the source itself
+    /// cannot record it (CtDispatchContext is not constructible outside
+    /// the core). Implemented by CtQueue<EventSet>, which constructs the
+    /// context internally (it is a friend of CtDispatchContext).
+    /// `payloadTypeKey` is the CtTypeKey of the rejected payload (for the
+    /// record's typeName — see the override). Zero allocation, no locks.
+    virtual void recordAsyncDrop(uint64_t payloadTypeKey) = 0;
+
     /// Number of queued events (approximate; diagnostics).
     virtual std::size_t size() const noexcept = 0;
 
@@ -255,6 +267,11 @@ public:
     /// Owned by the affinity thread; records kDropped for the count.
     std::size_t popDropped() override;
 
+    /// Async-path drop hook (Rev 13, P1): records kDropped in this queue's
+    /// trace for a source-side rejection (e.g. unregistered Qt translator,
+    /// M3 bridge §3.3 contract #5). Affinity-thread only.
+    void recordAsyncDrop(uint64_t payloadTypeKey) override;
+
     /// Block until an event is available (§14 #8, condition-variable wait).
     /// Affinity-thread only (debug assert); spurious wakeups allowed.
     void waitForEvent() override;
@@ -279,6 +296,10 @@ private:
     /// Notify the affinity thread that an event was pushed (§14 #8).
     /// Called under m_mutex after a successful push/pushAny.
     void notifyEvent();
+
+    /// Human-readable payload name for a CtTypeKey (recordAsyncDrop).
+    /// Unknown keys fall back to "<unregistered>" (never empty).
+    std::string_view typeNameFor(uint64_t payloadTypeKey) const noexcept;
 
     // Priority-aware insertion keeps events ordered by §10.3 rules:
     // higher priority first; equal priority keeps insertion order (stable).

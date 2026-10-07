@@ -24,9 +24,21 @@ add_compile_options(-Wall -Wextra)
 # ---------------------------------------------------------------------------
 add_subdirectory(src/event)
 
+# Qt bridge (M3): built only when Qt6 is found. The bridge directory runs its
+# own find_package(Qt6 COMPONENTS Core QUIET); the top-level guard keeps the
+# core library + tests fully Qt-independent (docs/event-system/05-qt-bridge.md
+# §5.2 contract #1). Probe Qt6 ONCE here so the guard below can decide.
+find_package(Qt6 COMPONENTS Core QUIET)
+if(Qt6_FOUND)
+    add_subdirectory(src/bridge)
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests & demos
 # ---------------------------------------------------------------------------
 enable_testing()
 add_subdirectory(tests/event)
+if(Qt6_FOUND)
+    add_subdirectory(tests/bridge)
+endif()
 add_subdirectory(examples/event_demo)

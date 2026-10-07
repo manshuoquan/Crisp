@@ -424,4 +424,35 @@ TEST_CASE(m2_closed_queue_rejects_pushes)
     EXPECT_EQ(queue.push(std::weak_ptr<CtReceiver>{}, std::move(ev)), false);
 }
 
+// --- recordAsyncDrop: source-side rejection leaves a kDropped trace -------
+
+TEST_CASE(m2_record_async_drop_records_kdropped_in_queue_trace)
+{
+    // (Rev 13, P1) CtQueueBase::recordAsyncDrop is the public hook for
+    // event sources whose poll() rejects an event BEFORE it enters the
+    // queue (e.g. an unregistered Qt translator in the M3 bridge, §3.3
+    // contract #5). The queue (a CtDispatchContext friend) records the
+    // kDropped phase in its OWN trace on the affinity thread.
+    TestQueue queue;
+
+    EXPECT_EQ(queue.trace().count(), 0u);  // fresh trace
+
+    // Known payload key -> traits name recorded.
+    const uint64_t mouseKey = CtTypeKey<MousePayload>::value();
+    queue.recordAsyncDrop(mouseKey);
+    EXPECT_EQ(queue.trace().count(), 1u);
+    EXPECT_EQ(queue.trace().at(0).phase, CtTracePhase::kDropped);
+    EXPECT_TRUE(queue.trace().at(0).typeName == "Mouse");
+
+    // Unknown key -> non-empty placeholder, still a kDropped record.
+    queue.recordAsyncDrop(0xDEADBEEF);
+    EXPECT_EQ(queue.trace().count(), 2u);
+    EXPECT_EQ(queue.trace().at(1).phase, CtTracePhase::kDropped);
+    EXPECT_TRUE(queue.trace().at(1).typeName == "<unregistered>");
+
+    // The drop hook does NOT enqueue anything (queue stays empty).
+    CtPendingEventBase* pe = nullptr;
+    EXPECT_EQ(queue.front(pe), false);
+}
+
 } // namespace (anonymous)

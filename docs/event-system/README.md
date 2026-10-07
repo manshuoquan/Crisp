@@ -15,6 +15,7 @@
 
 - **M1（同步核心）已完成**：`src/event/` 的 `CtEvent`/`CtDispatcher`/`CtReceiver`/`CtTrace` 等，测试 `tests/event/` 通过（§12.1、§13.1/§13.2）。
 - **M2（异步核心）已完成**：`CtQueue`/`CtEventLoop`/`CtEventSource`/`CtTimerEventSource`/`ManualEventSource` 与 `post/postTo` 完整语义，测试 `tests/event/test_ct_queue.cpp` 通过（§12.2、§13.3）。
+- **M3（Qt 桥）已完成**：`src/bridge/` 的 `CtQtEventPayload`/`CtQtEventSet`/`CtQtTranslatorTable`/`CtQtEventSource<EventSet>`/`postToQt` 双向桥接层，测试 `tests/bridge/` 通过（§5 设计文档 §7.1–§7.6，含双跑文件对比验证 §6）。
 - 示例 `examples/event_demo` 演示 M1 同步 + M2 异步完整链路。
 
 ## 快速导览

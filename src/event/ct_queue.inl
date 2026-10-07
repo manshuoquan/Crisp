@@ -183,6 +183,68 @@ std::size_t CtQueue<EventSet>::popDropped() {
 }
 
 template <typename EventSet>
+void CtQueue<EventSet>::recordAsyncDrop(uint64_t payloadTypeKey) {
+    // Affinity thread only (debug assert; release degrades to no-op).
+    if (!m_affinity.isOnThread()) {
+        assert(false && "CtQueue::recordAsyncDrop on non-affinity thread");
+        return;
+    }
+    CtDispatchContext ctx;
+    ctx.m_phase = CtTracePhase::kDropped;
+    m_trace.record(typeNameFor(payloadTypeKey), CtTracePhase::kDropped, ctx, 0);
+}
+
+namespace detail {
+namespace {
+
+/// Recursive pack walker: return the traits name of the first payload type
+/// in Ts... whose CtTypeKey matches `key`; "<unregistered>" if none match.
+template <typename... Ts>
+struct KeyNameLookup;
+
+template <>
+struct KeyNameLookup<> {
+    static std::string_view find(uint64_t) noexcept {
+        return "<unregistered>";
+    }
+};
+
+template <typename T, typename... Rest>
+struct KeyNameLookup<T, Rest...> {
+    static std::string_view find(uint64_t key) noexcept {
+        if (CtTypeKey<T>::value() == key)
+            return CtEventTraits<T>::name;
+        return KeyNameLookup<Rest...>::find(key);
+    }
+};
+
+/// Unpack a CtEventSet<Ts...> into the pack walker.
+template <typename EventSet>
+struct KeyNameLookupForSet;
+
+template <typename... Ts>
+struct KeyNameLookupForSet<CtEventSet<Ts...>> {
+    static std::string_view find(uint64_t key) noexcept {
+        return KeyNameLookup<Ts...>::find(key);
+    }
+};
+
+} // namespace (anonymous)
+} // namespace detail
+
+template <typename EventSet>
+std::string_view CtQueue<EventSet>::typeNameFor(
+    uint64_t payloadTypeKey) const noexcept {
+    // Map a CtTypeKey to its traits name for the drop record. The key space
+    // is the EventSet's own payloads (bounded, compile-time known); a
+    // foreign/unknown key falls back to a non-empty placeholder. CtEvent<T>
+    // is NOT default-constructible, so the lookup walks the type pack
+    // directly (no variant default-construction).
+    return detail::KeyNameLookupForSet<EventSet>::find(payloadTypeKey);
+}
+
+
+template <typename EventSet>
 void CtQueue<EventSet>::waitForEvent() {
     // Affinity-thread only (debug assert; release degrades to no-op).
     if (!m_affinity.isOnThread()) {
