@@ -64,6 +64,17 @@
 
 ---
 
+## 代码审计门禁（强制）
+
+- **所有生成的代码（`src/`、`tests/`、`examples/`）必须先过代码审计子agent**（`.github/agents/code-auditor.agent.md`），审计依据 `.github/skills/cpp-review-rules/SKILL.md`（Effective C++ / Modern Effective C++ / C++ Core Guidelines / Google Style 综合清单）。
+- **分档输出**：每条发现必须标注 `[MUST]`（必须修改）/ `[WARN]`（警告）/ `[SUGGEST]`（建议）。
+  - 存在 `[MUST]` → **REJECT**，打回编码子agent 修复后才能进入代码审查。
+  - 仅 `[WARN]`/`[SUGGEST]` → **CONDITIONAL/PASS**，进入代码审查子agent；`[WARN]` 应尽量修复或注明豁免理由。
+- 审计与审查分离：审计按通用规范（Effective C++ 等）查质量，审查核对与设计文档的一致性；两者都是门卫，都拥有打回权。
+- 审计/审查/测试循环：**编码 → 审计 → 修复 → 审查 → 修复 → 测试 → 修复**，直到 `DEPLOYED_OK`。
+
+---
+
 ## 构建与测试
 
 ```powershell
@@ -81,4 +92,5 @@ ctest --test-dir build
 
 - 现代 C++ 实践：见 `.github/skills/cpp-modern-best-practices/SKILL.md`
 - Effective C++ / C++ 编码规范：见 `.github/skills/cpp-coding-standards/SKILL.md`
+- **代码审查规则（Effective C++ / Modern Effective C++ / Core Guidelines / Google Style 综合 + 分档）：见 `.github/skills/cpp-review-rules/SKILL.md`**
 - 本项目风格细则：见 `docs/style-guide.md`

@@ -16,6 +16,7 @@
 | **Rev 2** | 2026-10-06 | **架构审查 Rev 1 打回（P1-1…P1-3 / P2-1…P2-4 / P3-1…P3-3）后修订**：P1-1 `CtQtEventCapture` 泛型化（`template <typename EventSet>`，成员 `CtQtEventSource<EventSet>* m_sink`，Q_OBJECT 在类模板内由 AUTOMOC 处理）；P1-2 新增 **§3.4 子节"捕获缓冲与 eventFilter 行为规格"**（容器 `std::vector<std::unique_ptr<QEvent>>`、poll 排空/清空点、kIgnoredQtEvents 跳过层、判空与重入保护、QCoreApplication 为 null 的构造/析构、Quit 特殊处理）；P1-3 `CtQtEventSource` 补 **`bool m_inPoll`**（debug 断言 + release 降级，§4.2 契约 #2/§7.4 #16 落实）；P2-1 `activate/deactivate` 精确定义（§3.4 契约 #6）；P2-2 §2.4 明确 **M3 唯一形态 = `CtEventLoop::exec()` 驱动 + poll 内 `processEvents()`**（Qt 侧无独立 exec，嵌套形态移入 M4 清单，§6.2 对齐）；P2-3 §2.3 补投递/重入显式说明；P2-4 §7.4 #14 依据改述（Qt 自动移除过滤器，桥不持 QObject 引用）；P3-1 §3.2 补 `CtTimerPayload` 语义；P3-2 双跑对比改为**文件对比**（Windows/MinGW 无 fork）；P3-3 §3.4 `kIgnoredQtEvents` 边界写清（应用级事件显式决策）；§9 开放问题按评审拍板回写。逐条见正文。 |
 | **Rev 3** | 2026-10-07 | **编码阶段暴露的 kDropped trace 冲突裁定（方案 A）后修订**：桥无法构造 `CtDispatchContext`（私有构造，friends 仅核心库），设计原"poll 内记 dispatcher trace kDropped"无法在零接口扩展下落地。架构裁定 **`CtQueueBase::recordAsyncDrop(uint64_t)` 接口扩展**（`CtQueue<EventSet>` 内部构造 ctx 记**队列 trace** kDropped，纯 C++17、零 Qt 依赖、M1/M2 语义不变）。五处修订：§3.3 契约 #5 改"记队列 trace（recordAsyncDrop 钩子）"、§7.2 用例 #8 改"队列 trace"、§7.6 用例 #22 明确队列 trace、§5.1 改"向后兼容接口扩展"、§8 偏差清单新增该项。 |
 | **Rev 4** | 2026-10-07 | **实现阶段裁定（编码评审后回写）**：①P1-1 泛型 `Q_OBJECT` 裁定**作废**——Qt 6.2.4 moc 实测不支持类模板内 `Q_OBJECT`（`Template classes not supported by Q_OBJECT`）；捕获类仅重写普通虚函数 `eventFilter()`，**移除 Q_OBJECT**，桥目标 AUTOMOC 关闭（§5.2 契约 #1"零 moc"恢复，更贴合 AGENTS.md 原则 6）；②`installDefaults` 语义落实：**所有可桥 Qt 类型**（非忽略 built-in + User+）默认恒等翻译，未注册类型不再一律 drop——`translateAndPush` 增加 identity 兜底（§3.3 契约 #4/§3.4a #4 实现），真正不可桥（不可 clone）类型经 null 缓冲标记记 kDropped（§3.4a #6 实现，原实现漏记）；③不可 clone 类型记 drop 于 poll 层改为 **drain 层 null 标记**（captureClone 入 `nullptr`，`translateAndPush` 记 `recordAsyncDrop`）；④双跑验证发现并修正：**`CtHandlerToken` 析构即注销**——`bindHandler` 返回值必须保持存活，否则 handler 立即注销、事件被 drain 丢弃；⑤双跑 bridge 后端接收者由 `QWidget` 改 `QObject`（QWidget 构造/`show()` 产生 ~19 个窗口生命周期事件污染捕获流）；⑥Qt 6 对 `QCoreApplication` 下创建 `QWidget` fail-fast（`0xC0000602`），测试/后端入口统一用 `QApplication`；⑦`dual_compare` 修复：`cmake -P` 脚本路径用绝对路径 + `WORKING_DIRECTORY` 指定日志目录。 |
+| **Rev 5** | 2026-10-11 | **M4 类型化翻译落地（见 `06-m4-typed-translation.md`）**：①桥集扩展 `CtQtEventSet = CtEventSet<CtTimerPayload, CtQtEventPayload, CtMousePayload, CtKeyPayload>`（§3.2 契约 #1/#2 修订——EventSet 必须含全部三载荷，06 §4 新契约）；②翻译器返回类型改 `CtQtTypedPayload = std::variant<CtQtEventPayload, CtMousePayload, CtKeyPayload>`，`translateAndPush` 用 `std::visit` 强类型 push（§3.3/§3.4 契约 #2 步骤④实现）；③默认翻译器安装：鼠标（Move/ButtonPress/ButtonRelease/ButtonDblClick → `CtMousePayload`，含 `CtMouseAction` 动作判别）与键盘（KeyPress/KeyRelease → `CtKeyPayload`，含 `CtKeyAction`）；④双跑 bridge 后端迁移为三 handler（mouse/key/raw-timer），对比输出仍字节一致；⑤桥库补链 `Qt6::Gui`（QMouseEvent/QKeyEvent 在 QtGui 模块）；⑥测试 30 个（新增 7 个 M4 用例），定时器测试改单次触发消除时序抖动。§9 #1 由"已裁定 M4"改"已落地"。 |
 
 ### 架构评审裁定（2026-10-06，依据 04 文档已定稿条款与 §14 倾向）
 
@@ -208,9 +209,9 @@ CRISP_EVENT_TYPE(crisp::event::CtQtEventPayload, "QtEvent");
 3. **nullptr 载荷合法**：表示"占位/空标记"，`qtType()==0`；handler 应先查 `hasEvent()`。
 4. **`qtType()`**：`static_cast<int>(m_event->type())`——仅供 trace 与翻译回 Qt 用；CRISP 事件身份永远是 `CtTypeKey<CtQtEventPayload>`（§3.3 契约 #1）。
 
-### 3.2 CtQtEventSet 与建议事件集（qt_event_set.h，新增）
+### 3.2 CtQtEventSet 与建议事件集（qt_event_set.h，新增；M4 扩展）
 
-**职责**：桥事件集。`CtQtEventSet` 是框架提供的默认桥集（含定时器 + 原始 Qt 载荷）；应用可自建更大的闭合集（含应用自有载荷）。
+**职责**：桥事件集。`CtQtEventSet` 是框架提供的默认桥集（含定时器 + 原始 Qt 载荷 + M4 类型化鼠标/键盘载荷）；应用可自建更大的闭合集（含应用自有载荷）。
 
 ```cpp
 // qt_event_set.h
@@ -218,19 +219,23 @@ CRISP_EVENT_TYPE(crisp::event::CtQtEventPayload, "QtEvent");
 #include "ct_event_set.h"
 #include "ct_timer_event_source.h"  // CtTimerPayload
 #include "qt_event_payload.h"       // CtQtEventPayload
+#include "qt_mouse_payload.h"       // CtMousePayload (M4)
+#include "qt_key_payload.h"         // CtKeyPayload (M4)
 
 namespace crisp::event {
 
-/// Default bridge event set: framework timer payload + raw Qt event payload.
-using CtQtEventSet = CtEventSet<CtTimerPayload, CtQtEventPayload>;
+/// Default bridge event set: framework timer payload + raw Qt event payload
+/// + M4 typed mouse/key payloads.
+using CtQtEventSet =
+    CtEventSet<CtTimerPayload, CtQtEventPayload, CtMousePayload, CtKeyPayload>;
 
 } // namespace crisp::event
 ```
 
 **契约**：
 
-1. **闭集**：`CtQtEventSet` 编译期固定为两个载荷；需要更多类型时应用自定义 `CtEventSet<CtTimerPayload, CtQtEventPayload, MyPayload...>`（04 §7.4 取舍：集合闭合，扩展 = 重新实例化 dispatcher）。
-2. **`CtQtEventSource<EventSet>` 的 `EventSet` 必须含 `CtQtEventPayload`**（`static_assert`），含 `CtTimerPayload` 可选。
+1. **闭集**：`CtQtEventSet` 编译期固定为四个载荷；需要更多类型时应用自定义 `CtEventSet<CtTimerPayload, CtQtEventPayload, CtMousePayload, CtKeyPayload, MyPayload...>`（04 §7.4 取舍：集合闭合，扩展 = 重新实例化 dispatcher）。
+2. **`CtQtEventSource<EventSet>` 的 `EventSet` 必须含 `CtQtEventPayload`、`CtMousePayload`、`CtKeyPayload`**（`static_assert`，M4 契约：源的 `translateAndPush` 对 `CtQtTypedPayload` 三分支逐一 `queue.push<P>`，缺任一载荷即编译失败；06 §4 取舍——不采用 `if constexpr` 降级，防止静默丢失类型化语义），含 `CtTimerPayload` 可选。
 3. **`CtTimerPayload` 的角色（Rev 2 P3-1 写清）**：`CtTimerPayload` 供应用**按需附加 `CtTimerEventSource<CtQtEventSet>`** 注入 CRISP 原生定时器事件（04 §7.12 内建源）；**桥自身定时器翻译产物是 `CtQtEventPayload`**（`QTimerEvent` 恒等翻译，§3.3 契约 #4）——二者并存且互不混淆：`CtTimerPayload` 来自 CRISP 定时器源、`CtQtEventPayload`（`qtType()==QEvent::Timer`）来自 Qt 定时器。
 4. 与 `CtEventSet` 的所有静态断言一致（非空、traits 特化、两两不同）。
 
@@ -285,11 +290,12 @@ private:
 
 **语义契约**：
 
-1. **翻译产物统一为 `CtQtEventPayload`**（`CtQtEventSource::poll` 只 push `CtEvent<CtQtEventPayload>`）：应用自定义映射可在翻译器内"把 Qt 事件载荷抽成自己的 payload"，但 CRISP 事件**类型**固定为 `CtQtEventPayload`（M3 简化，§9 开放问题 #1 已裁定 M4 才引入多类型直通）。翻译器签名里的 `CtQtEventPayload` 是唯一返回类型——不存在"返回任意类型"的虚接口。
+1. **翻译产物为 `CtQtTypedPayload`**（M4，`CtQtEventSource::poll` push `CtEvent<T>`，T ∈ {`CtQtEventPayload`, `CtMousePayload`, `CtKeyPayload`}，经 `std::visit` 强类型分支；06 §3.3）：应用自定义映射可在翻译器内"把 Qt 事件载荷抽成自己的 payload"，但 CRISP 事件**类型**限定在 `CtQtTypedPayload` 闭集内（M4 范围，06 §8 #3；应用自定义载荷直通超出范围）。翻译器签名返回 `CtQtTypedPayload`——不存在"返回任意类型"的虚接口。
 2. **`CtQtTypeKey` 只存在于桥层**：dispatcher/queue/handler 永远不直接见 int 枚举；映射表是"运行时 int → 闭集内唯一载荷"的受控边界（等效于 04 §6.1 对类型身份的编译期保证在桥入口处的一次性归一）。
 3. **`spontaneous()` → origin**：`QEvent::spontaneous()` 为 true → `CtEventOrigin::kSystem`（04 §7.3），否则 `kApplication`。这解决 Qt 痛点"事件来源只有 1 bit 且调试不可见"（02 §1.1）——进入 CRISP 后 origin 可 trace。
 4. **默认翻译器（installDefaults）**：
    - `QEvent::Timer`（1）→ 恒等翻译（`CtQtEventPayload`，无额外映射；Qt 定时器由 Qt 泵出）。
+   - **M4 类型化**：`MouseMove/MouseButtonPress/MouseButtonRelease/MouseButtonDblClick` → `CtMousePayload`（含 `CtMouseAction` 动作判别）；`KeyPress/KeyRelease` → `CtKeyPayload`（含 `CtKeyAction`）（06 §5 表）。
    - 其余可桥事件（`User` 及以上、以及 §3.4 显式允许的系统事件）→ 恒等翻译（`clone()` 载荷直通）。
    - `kIgnoredQtEvents`（§3.4）→ **不注册翻译器**（捕获即跳过，不进队列）。
 5. **查找失败**：未注册类型 → 事件不进队列，且记 trace `kDropped`（**队列 trace**——通过 `CtQueueBase::recordAsyncDrop` 公共钩子，桥无法构造 `CtDispatchContext`；dispatcher trace 的 kDropped 保留给"已入队但投递失败"语义，04 §8.1 Step 2；Rev 3 裁定）。
@@ -725,7 +731,7 @@ private:
 
 以下问题**架构评审已裁定（Rev 2 回写）**，编码子 agent 直接按裁定执行：
 
-1. **类型化翻译扩展**（M4）：`QMouseEvent`/`QKeyEvent` → CRISP 专用载荷（非原始 `CtQtEventPayload`）——是否引入多类型桥集？**裁定（评审同意）**：M4 再做。桥集届时扩展为 `CtEventSet<CtTimerPayload, CtMousePayload, CtKeyPayload, ...>`，翻译器返回类型改为 `std::variant` 或 `CtOpaqueEvent`（04 §14 逃生舱）。**M3 维持 `CtQtEventPayload` 单载荷**。
+1. **类型化翻译扩展**（M4，**已落地**：见 `06-m4-typed-translation.md`）：`QMouseEvent`/`QKeyEvent` → CRISP 专用载荷（`CtMousePayload`/`CtKeyPayload`，内置 CRISP 原生动作枚举）。桥集已扩展为 `CtEventSet<CtTimerPayload, CtQtEventPayload, CtMousePayload, CtKeyPayload>`，翻译器返回类型改为 `CtQtTypedPayload = std::variant<CtQtEventPayload, CtMousePayload, CtKeyPayload>`（06 §3）。**应用自定义载荷直通超出范围**（`CtQtTypedPayload` 为闭合三元 variant，06 §8 #3）。
 2. **桥的多线程支持**（M4）：工作线程的 `QObject` 事件桥接（捕获过滤器需每线程实例 + 线程安全缓冲）。**裁定（评审同意）**：**M3 不做**（§4.2 契约 #7 已固定单线程）；M4 视需求。
 3. **Qt 测试框架**：`tests/bridge/` 用 QtTest 还是继续手写 harness？**裁定（评审维持）**：沿用 `tests/event/test_harness.h` 风格（复制到 `tests/bridge/`），避免宏差异；QtTest 若评估更优再切换。
 4. **桥源捕获缓冲容量**：缓冲无限增长（应用在 poll 间不断有事件）的风险——是否给缓冲设上限？**裁定（评审同意）**：不设上限，但**容器定死为 `std::vector<std::unique_ptr<QEvent>>`**（§3.4a #1，配合 P1-2）——poll 每轮排空、`processEvents` 泵出与 poll 同线程、缓冲在 poll 内即清空；M4 若需平台等待再评估。

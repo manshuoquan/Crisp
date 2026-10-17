@@ -40,4 +40,4 @@ Return a concise summary:
 - **Public API added** (brief list)
 - **Design deviations** (should be none; list explicitly if any, with reasons)
 - **Ambiguities encountered** (or "none")
-- **Handoff**: "READY_FOR_CODE_REVIEW" so the code reviewer takes over.
+- **Handoff**: "READY_FOR_CODE_AUDIT" so the code auditor takes over (per AGENTS.md 代码审计门禁).

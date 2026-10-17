@@ -1,282 +1,137 @@
-# CRISP 事件系统重设计（中文版）
+# CRISP 浜嬩欢绯荤粺閲嶈璁★紙涓枃鐗堬級
 
-> **状态**：架构设计文档（不含实现代码）
-> **范围**：`crisp::event` — CRISP 项目事件子系统
-> **工具链**：MinGW-w64 8.1.0（32 位）、C++17、CMake ≥ 3.20、禁用 `std::filesystem`
-> **输入**：`AGENTS.md`、`docs/style-guide.md`、`docs/event-system/01..03`、现有原型代码 `src/event/`（`ct_event.h`、`ct_dispatcher.h`、`ct_trace.h`）、测试 `tests/event/`
-> **设计原则**：类型安全第一、可观测性内置、所有权明确、线程规则显式、热路径零堆分配、无代码生成
+> **鐘舵€?*锛氭灦鏋勮璁℃枃妗ｏ紙涓嶅惈瀹炵幇浠ｇ爜锛?> **鑼冨洿**锛歚crisp::event` 鈥?CRISP 椤圭洰浜嬩欢瀛愮郴缁?> **宸ュ叿閾?*锛歁inGW-w64 8.1.0锛?2 浣嶏級銆丆++17銆丆Make 鈮?3.20銆佺鐢?`std::filesystem`
+> **杈撳叆**锛歚AGENTS.md`銆乣docs/style-guide.md`銆乣docs/event-system/01..03`銆佺幇鏈夊師鍨嬩唬鐮?`src/event/`锛坄ct_event.h`銆乣ct_dispatcher.h`銆乣ct_trace.h`锛夈€佹祴璇?`tests/event/`
+> **璁捐鍘熷垯**锛氱被鍨嬪畨鍏ㄧ涓€銆佸彲瑙傛祴鎬у唴缃€佹墍鏈夋潈鏄庣‘銆佺嚎绋嬭鍒欐樉寮忋€佺儹璺緞闆跺爢鍒嗛厤銆佹棤浠ｇ爜鐢熸垚
 
 ---
 
-## 修订记录（Revision Log）
-
-| 版本 | 日期 | 内容 |
+## 淇璁板綍锛圧evision Log锛?
+| 鐗堟湰 | 鏃ユ湡 | 鍐呭 |
 |------|------|------|
-| Rev 1 | （首版） | 初始重设计文档（§1–§14）。 |
-| Rev 2 | 2026-10-02 | **架构审查打回后修订**：修复 6 个 P1 编译级矛盾与 6 个 P2 完整性问题；§14 开放问题 #3/#7 给出裁定。逐条见下。 |
-| **Rev 3** | 2026-10-02 | **架构审查 Rev 2 打回（N1–N4）后修订**：修复 2 个 P1（线程违例、2 个编译级问题）与 2 个 P2（M2 完整性缺口），并落实编辑层回写。逐条见下。 |
-| Rev 4 | 2026-10-02 | **架构审查 Rev 3 打回（P1-1…P1-7 / P2-8…P2-12 / P3）后修订**：修复 7 个 P1（N1 残留旧语义全文改写、push 签名、friend 清单、队列成员编译级、四个缺失定义、post 路由、错误文件命名）、5 个 P2（include/归属/编辑层回写/平台裁定/查找策略）与 3 项 P3 清理。逐条见下。 |
-| **Rev 5** | 2026-10-02 | **架构审查 Rev 4 打回（P1-1…P1-6 / P2-1…P2-6 / P3）后修订**：重定类型擦除边界（`front/popFront` 引用语义替代不可覆写的 `optional<抽象基类> pop`）、补 `CtQueue::pushAny` 覆写、`CtDispatcherBase` 补 `friend class CtEventLoop`、解除 `ct_receiver.h`↔`ct_dispatcher.h` 循环 include（前置声明）、补 `ct_event_loop.h`/`ct_event_source.h` 缺失 include、`CtEvent` 补 `setSequence/setPriority`（friend `CtDispatcherBase`/`CtQueue`）、`CtEventLoop` 队列惰性创建 + 路由注销契约、`CtHandlerToken` §6.4↔§7.7 同步、P3 三项落正文。逐条见下。 |
-| **Rev 6** | 2026-10-02 | **架构审查 Rev 5 打回（N-1…N-13）后修订**：修复 2 个 M1 阻塞 P1（`ct_receiver.h` 补 `ct_handler_token.h` include；`ct_dispatcher.h` 补 `CtPendingEventBase` 前置声明）、4 个 M2 P1（擦除边界拆为"非模板 `CtAnyEventBase` 接口 + 模板 `CtAnyEventHolder` 持有者"、队列优先级统一为事件 `uint64_t` 提示、排空伪码修广播空 weak_ptr 丢弃 bug、post 经擦除边界入队 + 跨 EventSet 断言/drop）、1 个 M1 编译 P2（`CtEvent` 构造重载 `enable_if` 消歧）与 5 项 P3（`CtPendingEventBase` 措辞/`kDropped` 记录点/`~CtHandlerToken noexcept`/`m_inDispatch` 条件编译/`ct_dispatcher.h` 显式 include affinity）。逐条见下。 |
-| **Rev 7** | 2026-10-02 | **架构审查 Rev 6 打回（P1-1…P1-3 / P2-1…P2-4）后修订**：`isBroadcast()` 改构造时固化广播标志（`CtPendingEvent` ctor 用 `owner_before` 判空，非活的 `expired()` 检查）；`CtDispatchTables` 移入 `crisp::event::detail`（与 §7.8 `detail::` 引用一致）；`m_inDispatch` 条件编译两分支真正不同（NDEBUG = 空成员）；`CtEvent::setPriority` 改 public；`CtAnyEventHolder` 补非 const `value()`（move 访问器）；`CtDispatcherBase` 补 `m_tokenStates` 弱引用集合成员（析构翻转 alive 的落点）；`CtEvent` 构造 `enable_if` 条件扩为"首参为 origin 即排除"。逐条见下。 |
-| **Rev 8** | 2026-10-02 | **架构审查 Rev 7 打回（P1-1…P1-5 / P2-1…P2-8）后修订**：`CtEvent` 补 `template <typename> friend class CtDispatcher;`（友元不继承，send/broadcast 才能调 setSequence）；`isBroadcast` 判空方向修正（`!空.owner_before(target)`）；`CtTracePhase` 移入 `ct_event.h` 解循环 include（ctx↔trace 无环）；`ct_handler_token.h` 补 `CtDispatcherBase` 前置声明；`CtDispatcher` 补 `dispatchAny` override 声明（类不再抽象）；补 `ErasedHandler/Filter/Observer` 精确定义；`ct_dispatcher.h` 补 `<unordered_map>`；`kDropped` 记录点统一（排空不跳过 dispatchAny，内部记）；`CtAnyEventHolder` 补 `eventSetId()`（重叠集合跨 EventSet 检测）；`setDispatcher` 队列创建时机统一 + 线程约束；`CtPendingEvent` ctor 补 `sequence` 参数；friend 注释改写。逐条见下。 |
-| **Rev 9** | 2026-10-02 | **架构审查 Rev 8 打回（P1-1…P1-4 / P2-1…P2-4 + P3）后修订**：擦除回调签名对齐 §5.2（`ErasedObserver` 携带 `const CtDispatchContext&`、`ErasedHandler/Filter` 用非 const `void*`）；`CtHandlerToken` 补 `template friend CtDispatcher`（友元不继承）；§8.2 广播条目判空调用（空 = 调用，非空已亡 = 跳过）；M1 `dispatchAny` 不可达 stub 定义 + M2 真实定义落点（dispatcher include queue，无环）；异步 sequence 单一事实来源（push 侧 stamp 入队序）；`CtEventLoop` 补 `attachSource/detachSource` + 源容器 + 注入路径（模板桥）；§5.3 同步 `CtTracePhase` 落点；`setDispatcher` 硬契约（同 EventSet 仅一次）+ `CtPendingEventBase::eventSetId()` 排空侧双重断言；跨 EventSet 丢弃归因（并入 `m_dropped`）；P3 清理（§14 措辞、record 签名、push 措辞、pushAny 序列来源）。逐条见下。 |
-| **Rev 10** | 2026-10-02 | **架构审查 Rev 9 打回（P1-1 / P2-1…P2-4 + P3）后修订**：`dispatchAny` 异步例外（排空不重赋值 sequence、保留 accepted 复位 + kDispatched 记入队序）；`CtQueue` 补 `m_seqCounter`（入队序单一事实来源，push/pushAny 持锁 stamp）+ `m_trace` 成员（front/popDropped 记录落点）；`CtQueueBase` 补 `eventSetId()` 纯虚（injectEvent 下转型前校验）；`injectEvent` 补进 §7.11 类定义且写全 `template <typename EventSet, typename T>`；`CtDispatcher` 显式 shared_ptr 所有权声明（make_shared 唯一路径）；`setDispatcher` 补 `dispatcher->assertSameThread()`（dispatcher 与 loop 同线程）；§7.6/§7.9 record 参数形式统一（按值）；§5.3 补 `CtHandlerPriority`/`CtPendingEventBase` 行；异步 trace typeName 用数值 payloadTypeKey（M4 可补 typeName()）。逐条见下。 |
-| **Rev 11** | 2026-10-02 | **架构审查 Rev 10 打回（P1-A / P2-A + P3）后修订**：`pushAny` 的 sequence 来源统一为 `m_seqCounter`（**不取 variant 内旧值**——发送方 CtEvent 的 sequence 可能为 0 或同步号），priority 从 variant 读（**删除 pushAny 的 priority 参数**避免双权威，`CtQueueBase`/`CtQueue` 签名同步）；源注入定**方案 A（源模板化）为首选**（非模板源在只持 `CtQueueBase&` 形态无注入通道），`injectEvent` 降级为应用/桥接层手工注入通道（有合法调用者）；§7.11 契约 #2 kDropped **三句分工**（kQueued→front 记队列 trace、溢出 kDropped→popDropped 记队列 trace、目标已亡 kDropped→dispatchAny 记 dispatcher trace）；异步 trace typeName 落点定死（`record()` 传占位 `"<async>"`，M4 补 typeName() 替换）；§8.2 Step 3 补异步例外（继承 §8.1 Step 3）；`ct_queue.h` include 清理（移除 ct_handler_token.h——priority 是 uint64_t）。逐条见下。 |
-| **Rev 12** | 2026-10-02 | **架构审查 Rev 11 打回（P1-1 / P1-2 / P2-1…P2-3 + P3）后修订**：`send` 改**双归属断言**（receiver 归属 ∧ dispatcher 归属，§8.1 Step 1/§10.2 规则 #1/归属表同步——dispatcher `m_trace` 严格单线程，防跨线程写 data race）；`CtDispatcherBase` 补 **`m_nextSequence`** 成员（同步 sequence 计数器落点，§7.8/§8.1/§8.2/§7.10 契约 #9）；`unbindAll` 方案 a 定稿（receiver 补 `m_dispatchers` 弱引用列表 + 前置声明 `CtDispatcherBase` + `<vector>`，§7.5/§9.1 契约 #4）；`payloadPtr()` 改**非 const `void*`**（两处基类 + holder + CtPendingEvent override，§6.5/§7.10）；`injectEvent` 注释改写（应用/桥接层手工注入通道，§7.11）；模板化源签名定稿（`CtTimerEventSource<EventSet>`，§7.12 契约 #4）；EventSet 身份键注明确认（`CtTypeKey<EventSet>::value()`，§7.4 契约 #6）；`dispatchAny` 注释修正（Step 2 + 4-8 + Step 3 accepted 复位）；排空异常路径定义（dispatchAny 抛异常→队头保留、重复 kQueued 可接受）；`record` objectId 冗余注明（ctx.receiverId() 为真相）。逐条见下。 |
-| **Rev 13（本轮）** | 2026-10-02 | **架构审查 Rev 12 打回（P1-1 / P2-A / P2-B + P3）后修订**：`payloadPtr()` **5 处去掉成员函数 `const` 限定符**（`virtual void* payloadPtr() noexcept`，override 同步——const 成员函数内 `&m_value` 转非 const `void*` 丢弃 const 是编译错误）；`CtDispatcherBase` 补 **`unregisterReceiver(uint64_t receiverObjectId)`**（protected + **`friend class CtReceiver;`**——unbindAll 遍历 `m_dispatchers` 逐个调用，COW 批量注销）；`CtEventSource` 补 **protected `setAffinityThread(CtThreadId)` + `friend class CtEventLoop;`**（attachSource 写入通道）；§8.1/§8.2 Step 3 显式 **`++m_nextSequence`**；`CtHandlerToken` move 赋值钉死（目标先注销旧注册再接管）；溢出丢弃策略裁定（**丢队尾**——优先级有序 deque 中"最旧"无精确落点）；`dispatchAny` 定向/广播分支显式（§7.8）。逐条见下。 |
+| Rev 1 | 锛堥鐗堬級 | 鍒濆閲嶈璁℃枃妗ｏ紙搂1鈥撀?4锛夈€?|
+| Rev 2 | 2026-10-02 | **鏋舵瀯瀹℃煡鎵撳洖鍚庝慨璁?*锛氫慨澶?6 涓?P1 缂栬瘧绾х煕鐩句笌 6 涓?P2 瀹屾暣鎬ч棶棰橈紱搂14 寮€鏀鹃棶棰?#3/#7 缁欏嚭瑁佸畾銆傞€愭潯瑙佷笅銆?|
+| **Rev 3** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 2 鎵撳洖锛圢1鈥揘4锛夊悗淇**锛氫慨澶?2 涓?P1锛堢嚎绋嬭繚渚嬨€? 涓紪璇戠骇闂锛変笌 2 涓?P2锛圡2 瀹屾暣鎬х己鍙ｏ級锛屽苟钀藉疄缂栬緫灞傚洖鍐欍€傞€愭潯瑙佷笅銆?|
+| Rev 4 | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 3 鎵撳洖锛圥1-1鈥1-7 / P2-8鈥2-12 / P3锛夊悗淇**锛氫慨澶?7 涓?P1锛圢1 娈嬬暀鏃ц涔夊叏鏂囨敼鍐欍€乸ush 绛惧悕銆乫riend 娓呭崟銆侀槦鍒楁垚鍛樼紪璇戠骇銆佸洓涓己澶卞畾涔夈€乸ost 璺敱銆侀敊璇枃浠跺懡鍚嶏級銆? 涓?P2锛坕nclude/褰掑睘/缂栬緫灞傚洖鍐?骞冲彴瑁佸畾/鏌ユ壘绛栫暐锛変笌 3 椤?P3 娓呯悊銆傞€愭潯瑙佷笅銆?|
+| **Rev 5** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 4 鎵撳洖锛圥1-1鈥1-6 / P2-1鈥2-6 / P3锛夊悗淇**锛氶噸瀹氱被鍨嬫摝闄よ竟鐣岋紙`front/popFront` 寮曠敤璇箟鏇夸唬涓嶅彲瑕嗗啓鐨?`optional<鎶借薄鍩虹被> pop`锛夈€佽ˉ `CtQueue::pushAny` 瑕嗗啓銆乣CtDispatcherBase` 琛?`friend class CtEventLoop`銆佽В闄?`ct_receiver.h`鈫擿ct_dispatcher.h` 寰幆 include锛堝墠缃０鏄庯級銆佽ˉ `ct_event_loop.h`/`ct_event_source.h` 缂哄け include銆乣CtEvent` 琛?`setSequence/setPriority`锛坒riend `CtDispatcherBase`/`CtQueue`锛夈€乣CtEventLoop` 闃熷垪鎯版€у垱寤?+ 璺敱娉ㄩ攢濂戠害銆乣CtHandlerToken` 搂6.4鈫斅?.7 鍚屾銆丳3 涓夐」钀芥鏂囥€傞€愭潯瑙佷笅銆?|
+| **Rev 6** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 5 鎵撳洖锛圢-1鈥-13锛夊悗淇**锛氫慨澶?2 涓?M1 闃诲 P1锛坄ct_receiver.h` 琛?`ct_handler_token.h` include锛沗ct_dispatcher.h` 琛?`CtPendingEventBase` 鍓嶇疆澹版槑锛夈€? 涓?M2 P1锛堟摝闄よ竟鐣屾媶涓?闈炴ā鏉?`CtAnyEventBase` 鎺ュ彛 + 妯℃澘 `CtAnyEventHolder` 鎸佹湁鑰?銆侀槦鍒椾紭鍏堢骇缁熶竴涓轰簨浠?`uint64_t` 鎻愮ず銆佹帓绌轰吉鐮佷慨骞挎挱绌?weak_ptr 涓㈠純 bug銆乸ost 缁忔摝闄よ竟鐣屽叆闃?+ 璺?EventSet 鏂█/drop锛夈€? 涓?M1 缂栬瘧 P2锛坄CtEvent` 鏋勯€犻噸杞?`enable_if` 娑堟锛変笌 5 椤?P3锛坄CtPendingEventBase` 鎺緸/`kDropped` 璁板綍鐐?`~CtHandlerToken noexcept`/`m_inDispatch` 鏉′欢缂栬瘧/`ct_dispatcher.h` 鏄惧紡 include affinity锛夈€傞€愭潯瑙佷笅銆?|
+| **Rev 7** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 6 鎵撳洖锛圥1-1鈥1-3 / P2-1鈥2-4锛夊悗淇**锛歚isBroadcast()` 鏀规瀯閫犳椂鍥哄寲骞挎挱鏍囧織锛坄CtPendingEvent` ctor 鐢?`owner_before` 鍒ょ┖锛岄潪娲荤殑 `expired()` 妫€鏌ワ級锛沗CtDispatchTables` 绉诲叆 `crisp::event::detail`锛堜笌 搂7.8 `detail::` 寮曠敤涓€鑷达級锛沗m_inDispatch` 鏉′欢缂栬瘧涓ゅ垎鏀湡姝ｄ笉鍚岋紙NDEBUG = 绌烘垚鍛橈級锛沗CtEvent::setPriority` 鏀?public锛沗CtAnyEventHolder` 琛ラ潪 const `value()`锛坢ove 璁块棶鍣級锛沗CtDispatcherBase` 琛?`m_tokenStates` 寮卞紩鐢ㄩ泦鍚堟垚鍛橈紙鏋愭瀯缈昏浆 alive 鐨勮惤鐐癸級锛沗CtEvent` 鏋勯€?`enable_if` 鏉′欢鎵╀负"棣栧弬涓?origin 鍗虫帓闄?銆傞€愭潯瑙佷笅銆?|
+| **Rev 8** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 7 鎵撳洖锛圥1-1鈥1-5 / P2-1鈥2-8锛夊悗淇**锛歚CtEvent` 琛?`template <typename> friend class CtDispatcher;`锛堝弸鍏冧笉缁ф壙锛宻end/broadcast 鎵嶈兘璋?setSequence锛夛紱`isBroadcast` 鍒ょ┖鏂瑰悜淇锛坄!绌?owner_before(target)`锛夛紱`CtTracePhase` 绉诲叆 `ct_event.h` 瑙ｅ惊鐜?include锛坈tx鈫攖race 鏃犵幆锛夛紱`ct_handler_token.h` 琛?`CtDispatcherBase` 鍓嶇疆澹版槑锛沗CtDispatcher` 琛?`dispatchAny` override 澹版槑锛堢被涓嶅啀鎶借薄锛夛紱琛?`ErasedHandler/Filter/Observer` 绮剧‘瀹氫箟锛沗ct_dispatcher.h` 琛?`<unordered_map>`锛沗kDropped` 璁板綍鐐圭粺涓€锛堟帓绌轰笉璺宠繃 dispatchAny锛屽唴閮ㄨ锛夛紱`CtAnyEventHolder` 琛?`eventSetId()`锛堥噸鍙犻泦鍚堣法 EventSet 妫€娴嬶級锛沗setDispatcher` 闃熷垪鍒涘缓鏃舵満缁熶竴 + 绾跨▼绾︽潫锛沗CtPendingEvent` ctor 琛?`sequence` 鍙傛暟锛沠riend 娉ㄩ噴鏀瑰啓銆傞€愭潯瑙佷笅銆?|
+| **Rev 9** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 8 鎵撳洖锛圥1-1鈥1-4 / P2-1鈥2-4 + P3锛夊悗淇**锛氭摝闄ゅ洖璋冪鍚嶅榻?搂5.2锛坄ErasedObserver` 鎼哄甫 `const CtDispatchContext&`銆乣ErasedHandler/Filter` 鐢ㄩ潪 const `void*`锛夛紱`CtHandlerToken` 琛?`template friend CtDispatcher`锛堝弸鍏冧笉缁ф壙锛夛紱搂8.2 骞挎挱鏉＄洰鍒ょ┖璋冪敤锛堢┖ = 璋冪敤锛岄潪绌哄凡浜?= 璺宠繃锛夛紱M1 `dispatchAny` 涓嶅彲杈?stub 瀹氫箟 + M2 鐪熷疄瀹氫箟钀界偣锛坉ispatcher include queue锛屾棤鐜級锛涘紓姝?sequence 鍗曚竴浜嬪疄鏉ユ簮锛坧ush 渚?stamp 鍏ラ槦搴忥級锛沗CtEventLoop` 琛?`attachSource/detachSource` + 婧愬鍣?+ 娉ㄥ叆璺緞锛堟ā鏉挎ˉ锛夛紱搂5.3 鍚屾 `CtTracePhase` 钀界偣锛沗setDispatcher` 纭绾︼紙鍚?EventSet 浠呬竴娆★級+ `CtPendingEventBase::eventSetId()` 鎺掔┖渚у弻閲嶆柇瑷€锛涜法 EventSet 涓㈠純褰掑洜锛堝苟鍏?`m_dropped`锛夛紱P3 娓呯悊锛埪?4 鎺緸銆乺ecord 绛惧悕銆乸ush 鎺緸銆乸ushAny 搴忓垪鏉ユ簮锛夈€傞€愭潯瑙佷笅銆?|
+| **Rev 10** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 9 鎵撳洖锛圥1-1 / P2-1鈥2-4 + P3锛夊悗淇**锛歚dispatchAny` 寮傛渚嬪锛堟帓绌轰笉閲嶈祴鍊?sequence銆佷繚鐣?accepted 澶嶄綅 + kDispatched 璁板叆闃熷簭锛夛紱`CtQueue` 琛?`m_seqCounter`锛堝叆闃熷簭鍗曚竴浜嬪疄鏉ユ簮锛宲ush/pushAny 鎸侀攣 stamp锛? `m_trace` 鎴愬憳锛坒ront/popDropped 璁板綍钀界偣锛夛紱`CtQueueBase` 琛?`eventSetId()` 绾櫄锛坕njectEvent 涓嬭浆鍨嬪墠鏍￠獙锛夛紱`injectEvent` 琛ヨ繘 搂7.11 绫诲畾涔変笖鍐欏叏 `template <typename EventSet, typename T>`锛沗CtDispatcher` 鏄惧紡 shared_ptr 鎵€鏈夋潈澹版槑锛坢ake_shared 鍞竴璺緞锛夛紱`setDispatcher` 琛?`dispatcher->assertSameThread()`锛坉ispatcher 涓?loop 鍚岀嚎绋嬶級锛浡?.6/搂7.9 record 鍙傛暟褰㈠紡缁熶竴锛堟寜鍊硷級锛浡?.3 琛?`CtHandlerPriority`/`CtPendingEventBase` 琛岋紱寮傛 trace typeName 鐢ㄦ暟鍊?payloadTypeKey锛圡4 鍙ˉ typeName()锛夈€傞€愭潯瑙佷笅銆?|
+| **Rev 11** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 10 鎵撳洖锛圥1-A / P2-A + P3锛夊悗淇**锛歚pushAny` 鐨?sequence 鏉ユ簮缁熶竴涓?`m_seqCounter`锛?*涓嶅彇 variant 鍐呮棫鍊?*鈥斺€斿彂閫佹柟 CtEvent 鐨?sequence 鍙兘涓?0 鎴栧悓姝ュ彿锛夛紝priority 浠?variant 璇伙紙**鍒犻櫎 pushAny 鐨?priority 鍙傛暟**閬垮厤鍙屾潈濞侊紝`CtQueueBase`/`CtQueue` 绛惧悕鍚屾锛夛紱婧愭敞鍏ュ畾**鏂规 A锛堟簮妯℃澘鍖栵級涓洪閫?*锛堥潪妯℃澘婧愬湪鍙寔 `CtQueueBase&` 褰㈡€佹棤娉ㄥ叆閫氶亾锛夛紝`injectEvent` 闄嶇骇涓哄簲鐢?妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾锛堟湁鍚堟硶璋冪敤鑰咃級锛浡?.11 濂戠害 #2 kDropped **涓夊彞鍒嗗伐**锛坘Queued鈫抐ront 璁伴槦鍒?trace銆佹孩鍑?kDropped鈫抪opDropped 璁伴槦鍒?trace銆佺洰鏍囧凡浜?kDropped鈫抎ispatchAny 璁?dispatcher trace锛夛紱寮傛 trace typeName 钀界偣瀹氭锛坄record()` 浼犲崰浣?`"<async>"`锛孧4 琛?typeName() 鏇挎崲锛夛紱搂8.2 Step 3 琛ュ紓姝ヤ緥澶栵紙缁ф壙 搂8.1 Step 3锛夛紱`ct_queue.h` include 娓呯悊锛堢Щ闄?ct_handler_token.h鈥斺€攑riority 鏄?uint64_t锛夈€傞€愭潯瑙佷笅銆?|
+| **Rev 12** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 11 鎵撳洖锛圥1-1 / P1-2 / P2-1鈥2-3 + P3锛夊悗淇**锛歚send` 鏀?*鍙屽綊灞炴柇瑷€**锛坮eceiver 褰掑睘 鈭?dispatcher 褰掑睘锛屄?.1 Step 1/搂10.2 瑙勫垯 #1/褰掑睘琛ㄥ悓姝モ€斺€攄ispatcher `m_trace` 涓ユ牸鍗曠嚎绋嬶紝闃茶法绾跨▼鍐?data race锛夛紱`CtDispatcherBase` 琛?**`m_nextSequence`** 鎴愬憳锛堝悓姝?sequence 璁℃暟鍣ㄨ惤鐐癸紝搂7.8/搂8.1/搂8.2/搂7.10 濂戠害 #9锛夛紱`unbindAll` 鏂规 a 瀹氱锛坮eceiver 琛?`m_dispatchers` 寮卞紩鐢ㄥ垪琛?+ 鍓嶇疆澹版槑 `CtDispatcherBase` + `<vector>`锛屄?.5/搂9.1 濂戠害 #4锛夛紱`payloadPtr()` 鏀?*闈?const `void*`**锛堜袱澶勫熀绫?+ holder + CtPendingEvent override锛屄?.5/搂7.10锛夛紱`injectEvent` 娉ㄩ噴鏀瑰啓锛堝簲鐢?妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾锛屄?.11锛夛紱妯℃澘鍖栨簮绛惧悕瀹氱锛坄CtTimerEventSource<EventSet>`锛屄?.12 濂戠害 #4锛夛紱EventSet 韬唤閿敞鏄庣‘璁わ紙`CtTypeKey<EventSet>::value()`锛屄?.4 濂戠害 #6锛夛紱`dispatchAny` 娉ㄩ噴淇锛圫tep 2 + 4-8 + Step 3 accepted 澶嶄綅锛夛紱鎺掔┖寮傚父璺緞瀹氫箟锛坉ispatchAny 鎶涘紓甯糕啋闃熷ご淇濈暀銆侀噸澶?kQueued 鍙帴鍙楋級锛沗record` objectId 鍐椾綑娉ㄦ槑锛坈tx.receiverId() 涓虹湡鐩革級銆傞€愭潯瑙佷笅銆?|
+| **Rev 13锛堟湰杞級** | 2026-10-02 | **鏋舵瀯瀹℃煡 Rev 12 鎵撳洖锛圥1-1 / P2-A / P2-B + P3锛夊悗淇**锛歚payloadPtr()` **5 澶勫幓鎺夋垚鍛樺嚱鏁?`const` 闄愬畾绗?*锛坄virtual void* payloadPtr() noexcept`锛宱verride 鍚屾鈥斺€攃onst 鎴愬憳鍑芥暟鍐?`&m_value` 杞潪 const `void*` 涓㈠純 const 鏄紪璇戦敊璇級锛沗CtDispatcherBase` 琛?**`unregisterReceiver(uint64_t receiverObjectId)`**锛坧rotected + **`friend class CtReceiver;`**鈥斺€攗nbindAll 閬嶅巻 `m_dispatchers` 閫愪釜璋冪敤锛孋OW 鎵归噺娉ㄩ攢锛夛紱`CtEventSource` 琛?**protected `setAffinityThread(CtThreadId)` + `friend class CtEventLoop;`**锛坅ttachSource 鍐欏叆閫氶亾锛夛紱搂8.1/搂8.2 Step 3 鏄惧紡 **`++m_nextSequence`**锛沗CtHandlerToken` move 璧嬪€奸拤姝伙紙鐩爣鍏堟敞閿€鏃ф敞鍐屽啀鎺ョ锛夛紱婧㈠嚭涓㈠純绛栫暐瑁佸畾锛?*涓㈤槦灏?*鈥斺€斾紭鍏堢骇鏈夊簭 deque 涓?鏈€鏃?鏃犵簿纭惤鐐癸級锛沗dispatchAny` 瀹氬悜/骞挎挱鍒嗘敮鏄惧紡锛埪?.8锛夈€傞€愭潯瑙佷笅銆?|
 
-**Rev 2 修订要点（对应审查报告）**：
-
-- **P1-1**：`CtQueue::pop` 改为返回 `std::optional<any_event>`（裁定方案 (a)）；`CtEvent() = delete` 保持；同步 §7.10/§7.11/§13.3 的签名与用例。
-- **P1-2**：`CtDispatchContext` 改为**私有默认构造 + friend**（`CtTrace` / `CtDispatcherBase` / `CtDispatcher<EventSet>`）；"应用不可伪造"不变；§7.9 的 `CtTraceRecord` aggregate 数组由此可行。
-- **P1-3**：`CtDispatcherBase::m_tables` 改为**普通** `std::shared_ptr<const CtDispatchTables>` + `std::atomic_load/std::atomic_store`；§6.5/§7.8/§11.1 统一；"M4 换 C++20 `std::atomic<shared_ptr>`"的说法保留。
-- **P1-4**：`CtTrace` 契约收紧为"**归属写者线程独占读写**"（record/dump/clear 均归属线程）+ 明确 release/acquire 内存序（P2-11 一并落地）；删除无锁载体的 "dump: locks" 表述。
-- **P1-5**：`CtReceiver::bindHandler` 增加 dispatcher 参数并**委托** `CtDispatcher::addHandler`（并存、签名同步、职责划分明确）。
-- **P1-6**：`CtReceiver` 与 `CtDispatcherBase` 新增 `isOnThread()` / `assertSameThread()`（内嵌 `CtThreadAffinity`）；§8.1/§8.2 对齐。
-- **P2-7**：如实声明 C++17 `std::atomic_load(shared_ptr)` 在 libstdc++/MSVC 内部各有锁——COW 读入口非绝对零锁（低竞争、非写路径互斥）；M4 换 C++20 或自研原子指针实现真零锁（§6.5/§7.8/§11.1/§11.2）。
-- **P2-8**：§7.3 显式声明保留 `accepted`（公有成员）与 `accept()/ignore()`；澄清"不可变"契约边界 = **载荷不可变、分发期 accepted 可变**。
-- **P2-9**：§5.2 补全 `CtHandler<T>` / `CtFilter<T>` / `CtObserver<T>` 完整定义；§7.8 `addObserver` 签名改回 `CtObserver<T>`。
-- **P2-10**：`CtTokenState::owner` 由 `void*` 改为 `std::weak_ptr<CtDispatcherBase>`；dispatcher 析构翻转 `alive` 与 token 注销例程**持同一 `m_writeMutex`**（锁内双检），关闭"token 读到 alive=true → dispatcher 析构中 → owner 悬垂"竞态窗口；`CtDispatcherBase` 继承 `enable_shared_from_this`。
-- **P2-11**：`CtTrace::m_head`（写 release / 读 acquire）、`m_count`（seq_cst）内存序明确声明。
-- **P2-12**：§10.4 偏差清单补 4 项：`defer_delete`（推迟 M3/M4）、`EventTraits<T>::compressible`（否决）、大负载 `unique_ptr`（细化）、`post(..., Priority)`（采纳但换位置为事件属性）。
-- **§14**：#1 关闭（偏差清单已补全）；#3 裁定 **M1 落实 `m_inDispatch` debug 深度护栏**；#7 裁定 **平台 API**（Windows `GetCurrentThreadId`）；#2/#4/#5/#6/#8 标注 M2/M4 前裁定、未定前按原倾向执行。
-
-**Rev 3 修订要点（对应审查报告 N1–N4）**：
-
-- **N1（P1，线程违例）**：`CtTrace` 严格单线程（§7.9 契约 #1）与异步相位记录点（push/post 侧记 `kQueued`、pop 侧记 `kDropped`/`kDispatched`）矛盾——push/post 可运行于任意线程，触碰归属线程独占的 trace 即 data race。**裁定方案 (a)**：异步相位全部改由**归属线程**在排空/溢出处理时记录。具体：`CtQueue::push` **不记 trace**（返回 bool 表示受理）；`CtQueue::pop` 不记 trace；`CtEventLoop` 在排空循环内记 `kQueued/kDropped`（`kDropped` 经 `popDropped()` 报告、`kQueued` 经 `CtQueue::trace()` 获取合法构造 ctx 的 friend 通道记录）；`post/postTo` 侧只记错误不记相位。§7.8 契约 #8、§7.9 相位注释、§7.10 契约 #6、§7.11 契约 #2、§10.1 契约 #3/#4、§13.3 用例 #3 全部同步。
-- **N2（P1，编译级）**：§7.8 `addObserver` 签名中的 `CtObserver<T, CtDispatchContext>` 传两个模板实参不可编译，且与 §5.2、§7.8 契约 #7 矛盾。**修复**：改回 `CtObserver<T>`（= `std::function<void(const CtEvent<T>&, const CtDispatchContext&)>`）；grep 核实全文无两参残留。
-- **N3（P1，编译级）**：`CtHandlerToken::~CtHandlerToken` 调 `owner->unregisterHandler(id)`，但 `unregisterHandler` 在 `CtDispatcherBase` 是 protected。**修复**：`CtDispatcherBase` 声明 `friend class CtHandlerToken;`（完整 friend 清单见 §7.8）。
-- **N4（P2，M2 完整性缺口）**：`CtPendingEvent<EventSet>` 只声明未定义、队列存储不携带目标 receiver、`dispatchAny` 未声明、`CtQueueBase` 接口未定义。**裁定方案 (A)，部分降级**：立即定死 `CtPendingEvent<EventSet>`（携带 `weak_ptr<CtReceiver>` 目标 + `CtAnyEvent` 载荷 + priority/sequence）与 `CtDispatcherBase::dispatchAny`（内部按变体分派、键匹配断言后调用擦除 lambda）；`CtQueueBase` 类型擦除接口**定义完整**（`push/pop/popDropped/size/trace/pendingEvent` 等），`CtEventLoop` 改持 `std::unique_ptr<CtQueueBase>`（避免按值基类切片与模板依赖），`CtEventSource::poll` 保留 `CtQueueBase&`。§5.3、§7.8、§7.10、§7.11、§7.12、§10.1、§12.2、§13.3 同步。
-- **编辑层回写**：① §8.1 Step 3 补"将 `event.accepted` 复位为 `false`"；② §7.8 `CtDispatcherBase` 成员清单补 `m_inDispatch`（与 §9.2 契约 #3 对齐）；③ §7.14 契约 #1 明确 `currentThreadId()` 用平台 API（Windows `GetCurrentThreadId`，MinGW 下稳定；跨平台留接口抽象），§14 #1 标记已关闭、#3/#7 回写正文。
-- **§14**：#1 **关闭**（编辑层回写 §10.4/§7.14）；#3 **已裁定并回写**（§7.8 `m_inDispatch`、§9.2 契约 #3）；#7 **已裁定并回写**（§7.14 平台 API）；#2/#4/#5/#6/#8 状态不变。
-
-**Rev 4 修订要点（对应审查裁决 P1-1…P1-7 / P2-8…P2-12 / P3）**：
-
-- **P1-1（N1 残留旧语义，全文改写）**：push/post 侧记 `kQueued`/`kDropped`、pop 侧记 `kDispatched` 的一切残留表述全部改写为裁定方案 (a)：**push/pop 一律不记 trace**；`kQueued`/`kDropped` 全部由**归属线程**在排空/溢出处理时记录（`CtEventLoop` 排空循环经 `popDropped()`/`trace()` friend 通道）；M1 占位明确"**不记任何相位**"。同步点：§7.8 契约 #8、§7.9 相位注释、§7.10 契约 #6（`push` 只记错误不记相位）、§7.11 契约 #2、§10.1 契约 #3/#4（#4 的"记 kQueued 占位相位"删除——§7.8 契约 #8 胜出）、§13.3 用例 #3。`CtEventLoop` 排空伪码更新为 `while (auto pe = q.pop()) { dispatcher->dispatchAny(*pe); }`。
-- **P1-2（push 签名）**：`CtQueue::push` 签名改 `bool push(CtEvent<T>&& event);`——受理返回 `true`、溢出返回 `false`；`post` 据此返回 `kHandled`/`kUnhandled`。修订记录中"N1 裁定 push 返回 bool"的声明与正文（§7.10 签名与契约 #6、§10.1 契约 #3）统一为 `bool`。
-- **P1-3（friend 清单三方矛盾）**：异步相位由 `CtQueue` 的 `popDropped()/trace()` 通道在**归属线程**记录——`CtQueue<EventSet>` 已是 friend，**不再新增 `CtEventLoop` friend**。`CtDispatchContext` friend 清单统一为 **4 个**：`CtTrace`、`CtDispatcherBase`、`CtDispatcher<EventSet>`、`CtQueue<EventSet>`；§7.6 契约 #6 文字同步（删除 `CtEventLoop`）。
-- **P1-4（队列成员编译级）**：`CtEventLoop` 的 `CtQueueBase m_queue;`（抽象基类按值成员必切片/不可编译）改 **`std::unique_ptr<CtQueueBase> m_queue;`**；构造函数内 `make_unique<CtQueue<EventSet>>(...)`，经 `setDispatcher<EventSet>` 模板实例化。§7.11 签名与 §7.12 契约 #2（`poll(CtQueueBase&)` 实参形态）联动核对。
-- **P1-5（四个缺失定义补全）**：① `CtPendingEvent<EventSet>` **完整定义**（`weak_ptr<CtReceiver>` 目标 + `CtAnyEvent` 载荷 + priority/sequence）；② `CtQueueBase` **类型擦除接口完整定义**（`push/pop/popDropped/size/trace/pendingEvent` 纯虚等）；③ `CtDispatcherBase::dispatchAny` 声明（§7.8）；④ 队列存储明确为 `deque<CtPendingEvent<EventSet>>`（与 P1-3 联动：定向投递需携带目标 receiver）。§5.3、§7.10、§7.11、§7.12、§10.1、§13.3 同步。
-- **P1-6（post 路由机制缺失）**：补齐"线程 → CtEventLoop → CtQueue"的注册/查找机制：`CtEventLoop::current()`（**每线程 TLS 静态函数**，返回当前线程的 loop 指针）+ `CtEventLoop::attachToCurrentThread()`；`post(receiver, ev)` 经 `receiver->affinityThread()` → 查 loop → 入队。§7.11 契约新增；§10.1 契约 #1/#2 引用。
-- **P1-7（错误文件命名不一致）**：统一为 **`ct_errors.h`**（§5.3 的写法）；§7.13 标题从 `ct_event_error.h` 改为 `ct_errors.h`，文件布局同步；`CtAffinityError`/`CtNoQueueError` **补定义**（简短，归入 `CtEventErrorKind` 枚举：`kWrongThread` 已有、新增 `kNoQueue` 替代 `CtNoQueueError`；`CtAffinityError` 即 `kWrongThread` 的错误类型别名语义，补 `CtEventError` 便捷构造）。
-- **P2-8（include 自包含）**：§7.10 `ct_queue.h` 的 include 补 `ct_thread_affinity.h`（签名用 `CtThreadId` 必须自包含）。
-- **P2-9（CtQueue 归属统一）**：`CtQueue` 内嵌 **`CtThreadAffinity m_affinity`**（构造记录当前线程），删除构造签名里的裸 `CtThreadId` 参数；`affinityThread()` 委托 `m_affinity.thread()`。§7.14 契约 #2/#6、§10.2 表同步。
-- **P2-10（accepted 复位回写）**：§8.1 Step 3 明确"将 `event.accepted` 复位为 `false`"（与 §7.3 契约 #6 引用对齐）；§8.2 Step 3 同步。
-- **P2-11（平台 API 裁定回写）**：§7.14 契约 #1 明确 `currentThreadId()` 用 Windows `GetCurrentThreadId`（MinGW 下稳定），跨平台留接口抽象；删除"std::hash<std::thread::id> 或平台 API"的摇摆表述。
-- **P2-12（send 定向查找策略定死）**：§8.1 Step 6 M1 实现策略定为"**遍历快照向量、`lock()` 后比对 `objectId`**"（M1 规模可接受），并注明 M4 可引入按 receiver 的分组索引。
-- **P3 清理（Rev 4）**：① `CtHandlerToken` 成员清单统一（§6.4 的 `m_id` 与 §7.7 的仅 `m_state`——统一为经 `m_state->id` 取 `id()`，`CtHandlerToken` 不再持有 `m_id`）；② `CtDispatcherBase::trace()` 与 `CtDispatcher::trace() const` 同名隐藏问题——**注明即可**（派生类 const 版本隐藏基类非 const 版本，属预期；实现侧保留基类 `trace()` 供内部使用）；③ §14 #1 标注"已关闭"（与修订记录一致）。
-
-**Rev 5 修订要点（对应审查裁决 P1-1…P1-6 / P2-1…P2-6 / P3）**：
-
-- **P1-1（擦除边界 pop 不可覆写）**：`CtQueueBase::pop()` 返回 `std::optional<CtPendingEventBase>` **不可实现**（抽象基类无法按值入 optional，且 `std::optional` 无返回类型协变，派生 `optional<CtPendingEvent<EventSet>>` 不构成覆写）→ **重定为 `front(CtPendingEventBase*&)` + `popFront()` 引用语义**（零堆、零拷贝、无切片；`CtPendingEvent<EventSet>` 继承非抽象 `CtPendingEventBase`，§6.5 边界类型具体化）。§7.10 契约 #3/#7、§7.11 契约 #2 排空伪码、§13.3 用例 #2/#3 同步。
-- **P1-2（CtQueue 未覆写 pushAny）**：补 `CtQueue::pushAny(std::unique_ptr<CtAnyEventBase>, ...)` 具体覆写；`detail::CtAnyEventBase` 重定为**具体可持有 variant 的类型**（`pushAny` 所有权转移，异步路径允许一次堆分配，§6.5/§7.10 契约 #7/§11.2）。
-- **P1-3（dispatchAny protected 访问）**：`CtDispatcherBase` 补 **`friend class CtEventLoop;`**（`exec` 排空调用 `dispatchAny`，与 `CtHandlerToken` 同理，§7.8 friend 清单）。
-- **P1-4（循环 include）**：`ct_receiver.h` **移除** `#include "ct_dispatcher.h"`，改**前置声明** `template <typename EventSet> class CtDispatcher;`（`bindHandler` 只在实例化期解析依赖名；`ct_dispatcher.h` 是"更富"的头，它 include `ct_receiver.h`，§7.5）。
-- **P1-5 / P1-6（头自包含）**：`ct_event_loop.h` 补 `#include "ct_dispatcher.h"`；`ct_event_source.h` 补 `#include "ct_queue.h"`（§7.11/§7.12）。
-- **P2-1（kQueued/kDropped 记录通道）**：裁定方案 (a)——`kQueued` 由 **`CtQueue::front()` 成功时记录**（队列是 `CtDispatchContext` friend、归属线程调用，无数据竞争）；`kDropped` 由 **`CtQueue::popDropped()` 内部按计数记录**。记录主体统一为 `CtQueue`，loop 不直接构造 ctx（§7.6 契约 #6、§7.10 契约 #6、§7.11 契约 #2）。
-- **P2-2（CtEvent sequence/priority 无写入机制）**：`CtEvent` 补 **`friend class CtDispatcherBase; template <typename> friend class CtQueue;`** 与私有 `setSequence(uint64_t)/setPriority(uint64_t)`（§7.3；§8.1 Step 3 与 §10.3 的写入落点）。
-- **P2-3（队列创建时机）**：`CtEventLoop` 的 `m_queue` 改**在 `setDispatcher<EventSet>` 内惰性创建**（构造函数运行时 EventSet 未知，无法实例化 `CtQueue<EventSet>`）；`queue()` 加前置条件"必须先 setDispatcher"（§7.11 契约 #3）。
-- **P2-4（路由映射生命周期）**：`~CtEventLoop` 契约**从 TLS 与线程→loop 映射移除自身**；post 侧校验目标 loop 存活（§7.11 契约 #7）。
-- **P2-5（擦除类型文件落点）**：`CtPendingEventBase` 定为公开类型（落点 `ct_queue.h`）；`detail::CtAnyEventBase` 定为实现细节（落点 `ct_queue.h`/`ct_dispatcher.h`）——都不进 §5.3 公开布局，注明宿主头（§6.5 注记）。
-- **P2-6（CtHandlerToken 两处不一致）**：§6.4 同步 §7.7（删 `m_id` 成员与 `reset()`，`id()` 经 `m_state->id` 取值），标注 §6.4 为摘录、§7.7 权威。
-- **P3 落正文（Rev 5）**：① §7.8 契约 #9 补 `trace()` 同名隐藏注明；② §14 #1 标"已关闭"、#3/#7 标"已裁定"；③ §11.2 队列锁行、§13.3 用例同步 front/popFront。
-
-**Rev 6 修订要点（对应审查裁决 N-1…N-13）**：
-
-- **N-1（M1 阻塞）**：`ct_receiver.h` 补 `#include "ct_handler_token.h"`（`bindHandler` 返回 `CtHandlerToken`，头必须自包含，§7.5）。
-- **N-2（M1 阻塞）**：`ct_dispatcher.h` 补 `namespace crisp::event { class CtPendingEventBase; }` 前置声明（`dispatchAny(CtPendingEventBase&)` 引用参数只需声明；完整定义在 `ct_queue.h`（M2），`CtEventLoop` 调用点提供完整类型，§7.8）。
-- **N-3（M2）**：擦除边界拆两层——`detail::CtAnyEventBase`（**非模板接口**，纯虚 `payloadTypeKey/payloadPtr`）+ `detail::CtAnyEventHolder<EventSet>`（**模板具体持有者**，持有 variant）。`CtQueueBase::pushAny` 收 `std::unique_ptr<detail::CtAnyEventBase>`（无模板实参问题），`CtQueue<EventSet>::pushAny` 键断言后 `static_cast` 到 Holder（§6.5/§7.10）。
-- **N-4（M2）**：队列存储与 `pushAny` 的 priority 统一为**事件的 `uint64_t` 排序提示**（`CtEvent::priority()`，§7.3）；`CtHandlerPriority` 仅保留作过滤器排序键（§7.15）。`CtPendingEventBase::priority()` 返回 `uint64_t`（§7.10/§10.3）。
-- **N-5（M2 正确性）**：排空伪码**不再用 `target().expired()` 判定丢弃**——空 `weak_ptr`（广播条目）的 `expired()` 返回 true 会静默丢弃所有异步广播。改为 `isBroadcast()`（空 target = 必须投递）vs 非空且 `lock()` 失败（跳过 + `kDropped`）（§7.11 契约 #2）。
-- **N-6（M2）**：`post` 入队路径定死为**经擦除边界 `CtQueueBase::pushAny`**（路由只给 `CtQueueBase&`，投递侧无法获知具体 EventSet；强类型 `CtQueue<EventSet>::push` 只在 EventSet 已知处用）（§10.1 契约 #5）。
-- **N-7（M2）**：**跨 EventSet 投递契约**——`post/postTo` 要求目标 loop EventSet 与发送方一致；不一致时 `pushAny` 键断言失败 → 丢弃 + `kDropped` + `kTypeNotInSet`，post 返回 `kUnhandled`（§10.1 契约 #5）。
-- **N-8（M1 编译）**：`CtEvent` 两个构造重载加 `enable_if` 消歧（首参为 `CtEventOrigin` 时仅 origin-first 重载参与；`CtEvent<T>(CtEventOrigin::kApplication)` 不再二义）（§7.3）。
-- **N-9（P3）**：`CtPendingEventBase` 措辞统一为"抽象基类、仅引用语义"（纯虚 `payloadTypeKey/payloadPtr` 与"CONCRETE 非抽象"表述矛盾）（§6.5/§7.10 契约 #7）。
-- **N-10（P3）**：`kDropped` 的"目标已亡"记录点补上——排空时非空 target 但 `lock()` 失败 → `dispatchAny` 记 `kDropped`（§7.10 契约 #6、§7.11 契约 #2）。
-- **N-11（P3）**：`~CtHandlerToken() noexcept` 两处统一（§6.4/§7.7）。
-- **N-12（P3）**：`m_inDispatch` 条件编译统一——`#if defined(NDEBUG)` 空成员 / 否则 `size_t`（§7.8 成员清单与 §9.2 契约 #3 一致）。
-- **N-13（P3）**：`ct_dispatcher.h` 显式 `#include "ct_thread_affinity.h"`（`m_affinity` 成员直接依赖，不靠 `ct_receiver.h` 传递包含）（§7.8）。
-
-**Rev 7 修订要点（对应审查裁决 P1-1…P1-3 / P2-1…P2-4）**：
-
-- **P1-1（isBroadcast 实现层未修复）**：`CtPendingEventBase::isBroadcast()` 改**构造时固化标志**——`CtPendingEvent<EventSet>` 的构造器用 `owner_before` 判空（"push 时 target 是否为空"），存 `m_isBroadcast`；**不再用活的 `expired()` 检查**（空 weak_ptr 与已亡 weak_ptr 的 `expired()` 都返回 true，无法区分"广播必须投递"与"目标已亡跳过"）。§6.5、§7.10 契约 #7、§7.11 契约 #2 三处同步（§6.5/§7.10）。
-- **P1-2（CtDispatchTables 命名空间不一致）**：`CtDispatchTables` **移入 `crisp::event::detail`**（纯实现细节，与 §7.8 的 `detail::CtDispatchTables` 引用一致）；§6.5 代码块命名空间改为 `namespace crisp::event::detail`（§6.5）。
-- **P1-3（m_inDispatch 条件编译分支相同）**：`#if defined(NDEBUG)` 分支改**空成员**（`[[maybe_unused]] char m_inDispatchPadding`），`#else` 分支保留 `size_t m_inDispatch`——两分支真正不同，与 §9.2 契约 #3"release 零开销"对齐（§7.8）。
-- **P2-1（priority 无公开设置路径）**：`CtEvent::setPriority(uint64_t)` 改 **public**（构造重载只转发给 T 的载荷构造，应用侧需公开 setter 产生非零 priority 供 §10.3 队列排序；`setSequence` 仍私有）（§7.3）。
-- **P2-2（CtAnyEventHolder 缺 move 访问器）**：补**非 const `any_event& value() noexcept`**（`CtQueue<EventSet>::pushAny` 需 move variant 进 pending_event，const& 无法 move）（§6.5）。
-- **P2-3（CtDispatcherBase 缺 token-state 集合）**：成员清单补 **`std::vector<std::weak_ptr<detail::CtTokenState>> m_tokenStates;`**（`makeTokenState` 登记、`unregisterHandler` 移除、析构持锁翻转所有 token 的 alive——§9.2 契约 #1 的落点）；`ct_dispatcher.h` include 补 `<vector>`（§7.8）。
-- **P2-4（enable_if 只消歧单参）**：`CtEvent` 构造重载的 `enable_if` 条件扩为**"首参为 `CtEventOrigin` 即排除"**（`sizeof...(Args) >= 1 && first is CtEventOrigin` 时 generic 重载不参与——`(origin, args...)` 多参形态不再被转发引用重载捕获）；删除误导注释（§7.3）。
-
-**Rev 8 修订要点（对应审查裁决 P1-1…P1-5 / P2-1…P2-8）**：
-
-- **P1-1（CtEvent 缺 CtDispatcher friend）**：`CtEvent<T>` 私有区补 **`template <typename> friend class CtDispatcher;`**——C++ 友元不继承，`CtDispatcherBase` 的友元资格不延伸到模板派生类 `CtDispatcher<EventSet>`，而 §8.1/§8.2 Step 3 的 `event.setSequence(...)` 正执行于 `CtDispatcher<EventSet>::send/broadcast`（§7.3）。
-- **P1-2（isBroadcast owner_before 方向）**：判空表达式改 **`m_isBroadcast = !std::weak_ptr<CtReceiver>{}.owner_before(target)`**——默认空 weak_ptr 是严格弱序最小元，`empty.owner_before(target)` 恰在 target 非空时为 true；**反向 `target.owner_before(empty)` 恒 false 会把所有定向事件标记为广播**。§6.5/§7.10 伪码统一（§6.5/§7.10）。
-- **P1-3（ctx↔trace 循环 include）**：**`CtTracePhase` 移入 `ct_event.h`**（§7.3）；`ct_dispatch_context.h` **不得** include `ct_trace.h`（只从 `ct_event.h` 取 `CtTracePhase`）；`ct_trace.h` 保留 include `ct_dispatch_context.h`（§7.6/§7.9）。include 图：ctx→event，trace→ctx→event，无环。
-- **P1-4（ct_handler_token.h 缺前置声明）**：文件开头补 **`namespace crisp::event { class CtDispatcherBase; }`**（`detail::CtTokenState::owner` 是 `weak_ptr<CtDispatcherBase>`，先于任何声明出现）（§7.7）。
-- **P1-5（CtDispatcher 漏 dispatchAny override）**：`CtDispatcher<EventSet>` 私有区补 **`void dispatchAny(CtPendingEventBase& pending) override;`**——否则基类纯虚未实现、`CtDispatcher` 抽象、`make_shared` 不可编译（§7.8）。
-- **P2-1（ErasedHandler/Filter/Observer 未定义）**：§6.5 补**精确定义**：`ErasedHandler = std::function<void(const void*)>`（event = CtEvent<T>*）、`ErasedFilter = std::function<bool(const void*)>`（event = const CtEvent<T>*）、`ErasedObserver = std::function<void(const void*, CtTracePhase)>`（event = const CtEvent<T>*）——注册时构造、键匹配断言后调用（§6.5）。
-- **P2-2（ct_event.h 缺 `<tuple>`）**：`enable_if` 用 `std::tuple_element_t`，include 补 `<tuple>`（§7.3）。
-- **P2-3（ct_dispatcher.h 缺 `<unordered_map>`）**：`detail::CtDispatchTables` 用 `unordered_map`，include 补 `<unordered_map>`（§7.8）。
-- **P2-4（kDropped 记录点矛盾）**：排空循环**不跳过 `dispatchAny`**——广播与定向都调；`dispatchAny` 内部判定：`isBroadcast()`（投递全表）/ 非广播且 `lock()` 失败（**记 `kDropped` 并跳过**）。统一"目标已亡的 kDropped 由 dispatchAny 记录"（§7.10 契约 #6、§7.11 契约 #2）。
-- **P2-5（重叠集合跨 EventSet 检测失效）**：`CtAnyEventBase` 补**纯虚 `eventSetId()`**，`CtAnyEventHolder<EventSet>` 以**地址派生键**（§6.1 方案）实现；`CtQueue<EventSet>::pushAny` 断言 `holder.eventSetId() == EventSet 自身键` **后再 cast**（payloadTypeKey 断言对共享类型 T 的重叠集合不够）（§6.5、§10.1 契约 #5）。
-- **P2-6（队列创建时机矛盾）**：统一为 **`CtEventLoop` 在 `setDispatcher<EventSet>` 内创建队列**（构造时 EventSet 未知）；**归属 = 调用 setDispatcher 的线程（必须为 loop 线程，M2 断言）**；`queue()` 前置条件（§10.2 契约 #4、§7.11 契约 #3）。
-- **P2-7（异步 sequence 悬空）**：`CtPendingEvent<EventSet>` 构造签名补 **`uint64_t sequence` 参数**（push 侧从 `CtEvent::sequence()` 拷贝，§7.3 的 `CtQueue` friend 通道落地）（§7.10）。
-- **P2-8（friend 注释误导）**：§7.3 注释改写——明确 `CtDispatcherBase` 与 `CtDispatcher<EventSet>` **都是** friend（友元不继承）（随 P1-1）。
-
-**Rev 9 修订要点（对应审查裁决 P1-1…P1-4 / P2-1…P2-4 + P3）**：
-
-- **P1-1（擦除回调签名不对齐 §5.2）**：`ErasedObserver` 改 **`std::function<void(const void*, const CtDispatchContext&)>`**（相位经 `ctx.phase()`，观察者需完整上下文 receiverId/filterIndex/elapsed/handlerCount，`CtTracePhase` 参数承载不了，wrapper 无法伪造 ctx——§7.6 私有构造）；`ErasedHandler`/`ErasedFilter` 改**非 const `void*`**（与 §5.2 `CtHandler<T>`/`CtFilter<T>` 非 const 事件对齐，去掉 const_cast 需要）（§6.5）。
-- **P1-2（CtHandlerToken 构造访问缺口）**：`CtHandlerToken` 私有区补 **`template <typename> friend class CtDispatcher;`**——非空 token 在 `CtDispatcher<EventSet>::addHandler` 构造，友元不继承（与 §7.3 CtEvent 同型问题）（§7.7 契约 #5）。
-- **P1-3（同步广播条目被 lock() 跳过）**：§8.2 Step 6 广播条目**注册时固化判空**——receiver 为空（`owner_before` 判空）= 广播条目**无条件调用**；非空且 `lock()` 失败（已亡）= 跳过（与异步 `isBroadcast` 同型修复，Rev 8, P1-3）（§8.2 Step 6）。
-- **P1-4（M1 dispatchAny 无定义 → 链接失败）**：§12.1 明确 **M1 提供不可达 stub 定义**（`assert(false)` 空体，引用参数不需完整类型）；**M2 真实定义**落点：`ct_dispatcher.h` include `ct_queue.h` 后实现（include 方向无环）（§12.1 step 9、§7.8 dispatchAny 注释）。
-- **P2-1（异步 sequence 语义分裂）**：定**单一事实来源**——push 侧（`CtQueue<EventSet>` 是 CtEvent friend）先 `setSequence()` 再拷贝进 pending = **入队序**；同步路径 §8.1 Step 3 直接赋值；排空侧不重赋值（§6.5/§7.10 `sequence()` 注释、`CtPendingEvent` ctor）。
-- **P2-2（CtEventLoop 缺源挂接）**：补 **`attachSource/detachSource`** API + **`m_sources` 容器**（shared_ptr，§11.5）；**注入路径定死**：loop 提供模板桥 `injectEvent<EventSet>`（下转型到具体 `CtQueue<EventSet>&` 后强类型 `push`）或源模板化（二选一）；`pushAny` 的 `eventSetId()` 断言兜底跨集合误注入（§7.11/§7.12 契约 #6）。
-- **P2-3（§5.3 布局脱节）**：`ct_event.h` 行标注 `CtTracePhase`（Rev 7 P1-3 移入）；`ct_trace.h` 行注明"相位从 ct_event.h 取"；`ct_event_loop.h` 行补 `attachSource`（§5.3）。
-- **P2-4（队列 EventSet == dispatcher EventSet 不变量）**：`setDispatcher` 定**硬契约**——同 `EventSet` 仅一次、重复（含异 `EventSet`）拒绝并断言；`CtPendingEventBase` 补 **`eventSetId()`**（地址派生，§6.1）供排空侧 `dispatchAny` 双重断言（payloadTypeKey + set 身份）（§7.11 契约 #3、§6.5/§7.10、§10.1 契约 #5）。
-- **P3 清理（Rev 9）**：① §14 #3 措辞 `inDispatch_` → `m_inDispatch`；② 跨 EventSet 拒绝与溢出**都并入 `m_dropped`**（记 `kDropped`），`kTypeNotInSet` 仅作错误类别不单开计数；③ §7.10 契约 #2 措辞精确化（强类型 `push` 直接构造 pending，`std::visit` 仅属 `pushAny`）；④ `pushAny` 的 priority/sequence 来源明确（`std::visit` 读 variant 内事件）；⑤ §7.9 `record` 按值 `CtDispatchContext` 与 §7.6 契约文字对齐。
-
-**Rev 10 修订要点（对应审查裁决 P1-1 / P2-1…P2-4 + P3）**：
-
-- **P1-1（dispatchAny 异步例外）**：§7.8 `dispatchAny` 注释 + §8.1 Step 3 补**异步例外**——排空路径**跳过 sequence 重赋值**（pending 已在 push 侧 stamp 入队序），保留 `accepted` 复位与 `kDispatched` 记录（记入队序）；同步 `send` 才重赋值（§7.8、§8.1 Step 3）。**异步计数器来源**：`CtQueue` 补 **`m_seqCounter`**（push/pushAny 持 `m_mutex` 自增并 stamp），与 dispatcher 同步计数是**两个独立键空间**（§7.10 契约 #9）。
-- **P2-1（injectEvent 安全网 + 声明 + 签名）**：`CtQueueBase` 补 **`virtual uint64_t eventSetId() const noexcept = 0;`**（injectEvent 下转型前校验——强类型 `push` 不经过 `pushAny` 的断言）；`injectEvent` **补进 §7.11 类定义**且写全 **`template <typename EventSet, typename T>`**（T 由实参推导）（§7.11、§7.12 契约 #6）。
-- **P2-2（CtQueue 缺 m_trace）**：`CtQueue` 私有成员补 **`CtTrace m_trace;`**（`front` 记 kQueued、`popDropped` 记 kDropped 的落点）（§7.10）。
-- **P2-3（dispatcher shared_ptr 所有权未声明）**：§7.8 类注释补**强制声明**——`CtDispatcher` 必须 `make_shared` 持有（`enable_shared_from_this` + `makeTokenState` 依赖 `shared_from_this()`，栈上创建首调 addHandler 抛 `std::bad_weak_ptr`）（§7.8）。
-- **P2-4（dispatcher 与 loop 同线程）**：`setDispatcher` 补 **`dispatcher->assertSameThread()`** 断言——dispatcher 创建线程必须等于 loop 归属线程（否则异步广播走 §8.2 Step 1 的 dispatcher 归属断言误触发）（§7.11 契约 #3）。
-- **P3（Rev 10）**：① §7.6 契约 #6 与 §7.9 `record` 参数形式统一（按值 `CtDispatchContext ctx`，调用侧传 const&）；② §5.3 补 `CtHandlerPriority`（§7.15 并入 ct_handler_token.h）与 `CtPendingEventBase`（公开，落点 ct_queue.h）行；③ 异步 trace typeName 用**数值 payloadTypeKey**（M4 可补 `virtual std::string_view typeName()`）。
-
-**Rev 11 修订要点（对应审查裁决 P1-A / P2-A + P3）**：
-
-- **P1-A（pushAny sequence 来源互斥）**：`CtQueue::pushAny` 注释改写——**sequence 不取自 variant**（发送方 `CtEvent<T>::sequence()` 可能为 0 或同步路径号），由本队列 `m_seqCounter` 持 `m_mutex` 自增 stamp（契约 #9）；**priority 从 variant 内事件读取**（`std::visit` 取 `CtEvent<T>::priority()`）。**`pushAny` 的 priority 参数删除**（`CtQueueBase::pushAny(std::unique_ptr<detail::CtAnyEventBase>, std::weak_ptr<CtReceiver>)` + `CtQueue::pushAny` 同步）——避免参数与 variant 值双权威（§7.10 签名与契约 #7）。
-- **P2-A（injectEvent 无调用路径）**：定**方案 A 为首选**——内建源（`CtTimerEventSource`/`ManualEventSource`）一律**源侧模板化**（携带 `EventSet` 类型参数，`poll` 内经 `queue.eventSetId()` 断言后 `static_cast<CtQueue<EventSet>&>` 强类型 `push`）；非模板源在只持 `CtQueueBase&` 形态下**没有注入通道**（无法调 loop 模板成员、也无法构造 holder）。`CtEventLoop::injectEvent<EventSet, T>` **降级标注为应用/桥接层手工注入通道**（有合法调用者：应用代码或 Qt 桥经 loop 指针调用，同样先断言 eventSetId 再下转型）（§7.12 契约 #6）。
-- **P3-1（§7.11 契约 #2 kDropped 三句分工）**：① `kQueued` 由 `CtQueue::front()` 记**队列 trace**；② 溢出 `kDropped` 由 `CtQueue::popDropped()` 记**队列 trace**；③ **目标已亡 `kDropped` 由 `dispatchAny` 记 dispatcher trace**（`dispatchAny` 只收 `CtPendingEventBase&`，无法访问队列 `m_trace`）——删除"一律经队列 trace"的矛盾表述（§7.11 契约 #2）。
-- **P3-2（异步 trace typeName 落点）**：`CtTrace::record(std::string_view typeName, ...)` 保持字符串形参；异步相位（kQueued/kDropped）的队列 trace 传**占位 `"<async>"`**，M4 补 `CtPendingEventBase::typeName()` 后替换（§7.9 record 注释、§7.10 契约 #6）。
-- **P3-3（§8.2 Step 3 异步例外）**：广播 pending 经 `dispatchAny` 排空时**继承 §8.1 Step 3 异步例外**（跳过 sequence 重赋值、保留 accepted 复位 + kDispatched 记入队序）（§8.2 Step 3）。
-- **P3-4（ct_queue.h include 清理）**：移除 `ct_handler_token.h`（`CtQueue` 的 priority 是 `uint64_t`，不用 `CtHandlerPriority`）——防意外依赖（§7.10 include 清单）。
-
-**Rev 12 修订要点（对应审查裁决 P1-1 / P1-2 / P2-1…P2-3 + P3）**：
-
-- **P1-1（send 线程契约与 dispatcher 单线程矛盾）**：`send` Step 1 改**双归属断言** `if (!receiver->assertSameThread() || !this->assertSameThread())`——receiver 归属 **∧** dispatcher 归属；**隐含 "receiver 必须创建于 dispatcher 归属线程"**。§10.2 规则 #1 与归属表同步改写（dispatcher `m_trace` 严格单线程，§7.9 契约 #1；跨线程 send 写 trace = data race）（§8.1 Step 1、§10.2）。
-- **P1-2（同步 sequence 计数器无落点）**：`CtDispatcherBase` 成员清单补 **`uint64_t m_nextSequence = 0;`**（同步路径单线程访问，普通 uint64_t 安全；§8.1/§8.2 Step 3 `++` 后 `setSequence`；异步走队列 `m_seqCounter`，两键空间独立）（§7.8）。
-- **P2-1（unbindAll 无定位机制）**：方案 a 定稿——receiver 补 **`std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers;`**（`bindHandler` 登记、注销/析构移除；`unbindAll()` 遍历逐个注销）；`ct_receiver.h` 补 `<vector>` + 前置声明 `CtDispatcherBase`；**澄清这不是第二套 handler 表**（§7.5 契约 #5 禁的是 handler 表，不排斥 dispatcher 指针列表）（§7.5、§9.1 契约 #4）。
-- **P2-2（payloadPtr const 矛盾）**：`CtPendingEventBase::payloadPtr()`、`detail::CtAnyEventBase::payloadPtr()`、`CtAnyEventHolder::payloadPtr()`、`CtPendingEvent::payloadPtr()` **全部改非 const `void*`**——dispatchAny 走 §8.1 管线复位 accepted、handler/filter 收非 const `CtEvent<T>&`（§6.5/§7.10）。
-- **P2-3（injectEvent 注释残留）**：改写为"**应用/桥接层手工注入通道**"（应用代码或 Qt 桥经 loop 指针调用），断言/下转型语义保留（§7.11）。
-- **P3-1（模板化源签名）**：§7.12 契约 #4 定 `CtTimerEventSource<EventSet>`/`ManualEventSource<EventSet>`（携带 EventSet 类型参数的模板类，`poll` 内 eventSetId 断言 + 下转型强类型 push；抽象接口 `CtEventSource` 保持非模板，模板化落派生源）。
-- **P3-2（EventSet 身份键 API）**：§7.4 契约 #6 注明——`eventSetId()` 的实现 = **`CtTypeKey<CtEventSet<Ts...>>::value()`**（§6.1 方案泛用）。
-- **P3-3（dispatchAny 注释）**：修正为 "**Step 2（COW 快照）+ Steps 4-8 + Step 3 的 accepted 复位**（不含 sequence 重赋值）"（§7.8）。
-- **P3-4（排空异常路径）**：`dispatchAny` 抛异常→`popFront` 未执行→队头保留、下一轮重复记 `kQueued`（可接受）；异常传播到 `exec()` 调用方；**不得吞异常跳过 popFront**（§7.11 契约 #2）。
-- **P3-5（record objectId 冗余）**：`CtTrace::record` 的 `objectId` 参数注明是 `ctx.receiverId()` 的便捷拷贝（真相在 ctx；实现可省略该参数改读 ctx）——签名保持为认可形式（§7.9）。
-
-**Rev 13 修订要点（对应审查裁决 P1-1 / P2-A / P2-B + P3）**：
-
-- **P1-1（payloadPtr const 成员函数矛盾）**：`payloadPtr()` **5 处签名去掉成员函数 `const` 限定符** → `virtual void* payloadPtr() noexcept = 0;`（`CtPendingEventBase` §6.5/§7.10 ×2、`detail::CtAnyEventBase`、`CtAnyEventHolder` 内联体、`CtPendingEvent` override 同步）——const 成员函数内 `&m_value`（`const any_event*`）隐式转非 const `void*` 丢弃 const 是编译错误（§6.5/§7.10）。
-- **P2-A（unbindAll 无落地机制）**：`CtDispatcherBase` 补 **`void unregisterReceiver(uint64_t receiverObjectId);`**（protected，持 `m_writeMutex` + COW 发布，移除快照中所有匹配 receiver 的 Handler/Filter/Observer 条目）+ **`friend class CtReceiver;`**；§7.5 `bindHandler` 向 `m_dispatchers` 登记、`unbindAll` 遍历逐个调 `unregisterReceiver(objectId())`；陈旧弱指针 `lock()` 失败即跳过（§7.8、§7.5 契约 #5/#6、§9.1 契约 #4）。
-- **P2-B（CtEventSource affinity 写入通道）**：`CtEventSource` 补 **protected `void setAffinityThread(CtThreadId)` + `friend class CtEventLoop;`**；`attachSource` attach 成功时调用（§7.12 类定义 + 契约 #5、§7.11）。
-- **P3-1（Step 3 显式化）**：§8.1/§8.2 Step 3 直接写 **`event.setSequence(++m_nextSequence)`**（不再靠 §7.8 注释指认）。
-- **P3-2（token move 赋值）**：§7.7 契约 #2 钉死——move 赋值时目标若持有**存活注册**，**先注销旧注册再接管**（等价析构 + move-construct）。
-- **P3-3（溢出丢弃策略）**：裁定**丢弃队尾**（最低优先级、同级中最旧；优先级有序 deque 中"最旧"无精确落点，队尾无需时间戳）——§7.10 契约 #5、§10.3 规则 #3 同步。
-- **P3-4（dispatchAny 分支显式）**：§7.8 `dispatchAny` 注释明确——`pending.isBroadcast()` → §8.2 广播语义（全表投递，receiverId=0）；否则 → §8.1 定向语义（`pending.target()` 定向查找）；分支在 dispatchAny 内部解析（不在排空循环）。
-
+**Rev 2 淇瑕佺偣锛堝搴斿鏌ユ姤鍛婏級**锛?
+- **P1-1**锛歚CtQueue::pop` 鏀逛负杩斿洖 `std::optional<any_event>`锛堣瀹氭柟妗?(a)锛夛紱`CtEvent() = delete` 淇濇寔锛涘悓姝?搂7.10/搂7.11/搂13.3 鐨勭鍚嶄笌鐢ㄤ緥銆?- **P1-2**锛歚CtDispatchContext` 鏀逛负**绉佹湁榛樿鏋勯€?+ friend**锛坄CtTrace` / `CtDispatcherBase` / `CtDispatcher<EventSet>`锛夛紱"搴旂敤涓嶅彲浼€?涓嶅彉锛浡?.9 鐨?`CtTraceRecord` aggregate 鏁扮粍鐢辨鍙銆?- **P1-3**锛歚CtDispatcherBase::m_tables` 鏀逛负**鏅€?* `std::shared_ptr<const CtDispatchTables>` + `std::atomic_load/std::atomic_store`锛浡?.5/搂7.8/搂11.1 缁熶竴锛?M4 鎹?C++20 `std::atomic<shared_ptr>`"鐨勮娉曚繚鐣欍€?- **P1-4**锛歚CtTrace` 濂戠害鏀剁揣涓?**褰掑睘鍐欒€呯嚎绋嬬嫭鍗犺鍐?*"锛坮ecord/dump/clear 鍧囧綊灞炵嚎绋嬶級+ 鏄庣‘ release/acquire 鍐呭瓨搴忥紙P2-11 涓€骞惰惤鍦帮級锛涘垹闄ゆ棤閿佽浇浣撶殑 "dump: locks" 琛ㄨ堪銆?- **P1-5**锛歚CtReceiver::bindHandler` 澧炲姞 dispatcher 鍙傛暟骞?*濮旀墭** `CtDispatcher::addHandler`锛堝苟瀛樸€佺鍚嶅悓姝ャ€佽亴璐ｅ垝鍒嗘槑纭級銆?- **P1-6**锛歚CtReceiver` 涓?`CtDispatcherBase` 鏂板 `isOnThread()` / `assertSameThread()`锛堝唴宓?`CtThreadAffinity`锛夛紱搂8.1/搂8.2 瀵归綈銆?- **P2-7**锛氬瀹炲０鏄?C++17 `std::atomic_load(shared_ptr)` 鍦?libstdc++/MSVC 鍐呴儴鍚勬湁閿佲€斺€擟OW 璇诲叆鍙ｉ潪缁濆闆堕攣锛堜綆绔炰簤銆侀潪鍐欒矾寰勪簰鏂ワ級锛汳4 鎹?C++20 鎴栬嚜鐮斿師瀛愭寚閽堝疄鐜扮湡闆堕攣锛埪?.5/搂7.8/搂11.1/搂11.2锛夈€?- **P2-8**锛毬?.3 鏄惧紡澹版槑淇濈暀 `accepted`锛堝叕鏈夋垚鍛橈級涓?`accept()/ignore()`锛涙緞娓?涓嶅彲鍙?濂戠害杈圭晫 = **杞借嵎涓嶅彲鍙樸€佸垎鍙戞湡 accepted 鍙彉**銆?- **P2-9**锛毬?.2 琛ュ叏 `CtHandler<T>` / `CtFilter<T>` / `CtObserver<T>` 瀹屾暣瀹氫箟锛浡?.8 `addObserver` 绛惧悕鏀瑰洖 `CtObserver<T>`銆?- **P2-10**锛歚CtTokenState::owner` 鐢?`void*` 鏀逛负 `std::weak_ptr<CtDispatcherBase>`锛沝ispatcher 鏋愭瀯缈昏浆 `alive` 涓?token 娉ㄩ攢渚嬬▼**鎸佸悓涓€ `m_writeMutex`**锛堥攣鍐呭弻妫€锛夛紝鍏抽棴"token 璇诲埌 alive=true 鈫?dispatcher 鏋愭瀯涓?鈫?owner 鎮瀭"绔炴€佺獥鍙ｏ紱`CtDispatcherBase` 缁ф壙 `enable_shared_from_this`銆?- **P2-11**锛歚CtTrace::m_head`锛堝啓 release / 璇?acquire锛夈€乣m_count`锛坰eq_cst锛夊唴瀛樺簭鏄庣‘澹版槑銆?- **P2-12**锛毬?0.4 鍋忓樊娓呭崟琛?4 椤癸細`defer_delete`锛堟帹杩?M3/M4锛夈€乣EventTraits<T>::compressible`锛堝惁鍐筹級銆佸ぇ璐熻浇 `unique_ptr`锛堢粏鍖栵級銆乣post(..., Priority)`锛堥噰绾充絾鎹綅缃负浜嬩欢灞炴€э級銆?- **搂14**锛?1 鍏抽棴锛堝亸宸竻鍗曞凡琛ュ叏锛夛紱#3 瑁佸畾 **M1 钀藉疄 `m_inDispatch` debug 娣卞害鎶ゆ爮**锛?7 瑁佸畾 **骞冲彴 API**锛圵indows `GetCurrentThreadId`锛夛紱#2/#4/#5/#6/#8 鏍囨敞 M2/M4 鍓嶈瀹氥€佹湭瀹氬墠鎸夊師鍊惧悜鎵ц銆?
+| **Rev 14（审计修复）** | 2026-10-11 | **cpp-review-rules 代码审计（REJECT）后修复**：MUST-1 CtQueueBase::popFront() 改**按身份删除** popFront(CtPendingEventBase* which)（front/dispatch/pop 之间跨线程 push 前插不再误删新事件、避免二次分发——§7.10 契约 #3 措辞同步）；MUST-2 CtEventLoop::exec() 补 !m_queue 空指针保护（未 setDispatcher 时断言 + 返回 0，不再 UB）；WARN 修复：unObservers 的 m_handlerCount 改为该事件类型实际 handler 数、unFilters 去 const_cast（非 const 参数）、ddHandler/Filter/Observer token state 先于 publish（防 bad_alloc 孤儿注册）、分发各步骤补 m_elapsed 打点、溢出丢弃注释与文档措辞统一（同级丢弃 seq 最大/最新）、CtTrace::sequence() 返回 m_writeSequence、8 个源码文件去 BOM 转 LF、(void) cast 改 [[maybe_unused]]、reentry release-only 测试 Debug 下跳过；SUGGEST 采纳：CtEvent move 条件 noexcept、qt_sink.cpp 裸 new 改 make_unique。逐条见正文。 |
+**Rev 3 淇瑕佺偣锛堝搴斿鏌ユ姤鍛?N1鈥揘4锛?*锛?
+- **N1锛圥1锛岀嚎绋嬭繚渚嬶級**锛歚CtTrace` 涓ユ牸鍗曠嚎绋嬶紙搂7.9 濂戠害 #1锛変笌寮傛鐩镐綅璁板綍鐐癸紙push/post 渚ц `kQueued`銆乸op 渚ц `kDropped`/`kDispatched`锛夌煕鐩锯€斺€攑ush/post 鍙繍琛屼簬浠绘剰绾跨▼锛岃Е纰板綊灞炵嚎绋嬬嫭鍗犵殑 trace 鍗?data race銆?*瑁佸畾鏂规 (a)**锛氬紓姝ョ浉浣嶅叏閮ㄦ敼鐢?*褰掑睘绾跨▼**鍦ㄦ帓绌?婧㈠嚭澶勭悊鏃惰褰曘€傚叿浣擄細`CtQueue::push` **涓嶈 trace**锛堣繑鍥?bool 琛ㄧず鍙楃悊锛夛紱`CtQueue::pop` 涓嶈 trace锛沗CtEventLoop` 鍦ㄦ帓绌哄惊鐜唴璁?`kQueued/kDropped`锛坄kDropped` 缁?`popDropped()` 鎶ュ憡銆乣kQueued` 缁?`CtQueue::trace()` 鑾峰彇鍚堟硶鏋勯€?ctx 鐨?friend 閫氶亾璁板綍锛夛紱`post/postTo` 渚у彧璁伴敊璇笉璁扮浉浣嶃€偮?.8 濂戠害 #8銆伮?.9 鐩镐綅娉ㄩ噴銆伮?.10 濂戠害 #6銆伮?.11 濂戠害 #2銆伮?0.1 濂戠害 #3/#4銆伮?3.3 鐢ㄤ緥 #3 鍏ㄩ儴鍚屾銆?- **N2锛圥1锛岀紪璇戠骇锛?*锛毬?.8 `addObserver` 绛惧悕涓殑 `CtObserver<T, CtDispatchContext>` 浼犱袱涓ā鏉垮疄鍙備笉鍙紪璇戯紝涓斾笌 搂5.2銆伮?.8 濂戠害 #7 鐭涚浘銆?*淇**锛氭敼鍥?`CtObserver<T>`锛? `std::function<void(const CtEvent<T>&, const CtDispatchContext&)>`锛夛紱grep 鏍稿疄鍏ㄦ枃鏃犱袱鍙傛畫鐣欍€?- **N3锛圥1锛岀紪璇戠骇锛?*锛歚CtHandlerToken::~CtHandlerToken` 璋?`owner->unregisterHandler(id)`锛屼絾 `unregisterHandler` 鍦?`CtDispatcherBase` 鏄?protected銆?*淇**锛歚CtDispatcherBase` 澹版槑 `friend class CtHandlerToken;`锛堝畬鏁?friend 娓呭崟瑙?搂7.8锛夈€?- **N4锛圥2锛孧2 瀹屾暣鎬х己鍙ｏ級**锛歚CtPendingEvent<EventSet>` 鍙０鏄庢湭瀹氫箟銆侀槦鍒楀瓨鍌ㄤ笉鎼哄甫鐩爣 receiver銆乣dispatchAny` 鏈０鏄庛€乣CtQueueBase` 鎺ュ彛鏈畾涔夈€?*瑁佸畾鏂规 (A)锛岄儴鍒嗛檷绾?*锛氱珛鍗冲畾姝?`CtPendingEvent<EventSet>`锛堟惡甯?`weak_ptr<CtReceiver>` 鐩爣 + `CtAnyEvent` 杞借嵎 + priority/sequence锛変笌 `CtDispatcherBase::dispatchAny`锛堝唴閮ㄦ寜鍙樹綋鍒嗘淳銆侀敭鍖归厤鏂█鍚庤皟鐢ㄦ摝闄?lambda锛夛紱`CtQueueBase` 绫诲瀷鎿﹂櫎鎺ュ彛**瀹氫箟瀹屾暣**锛坄push/pop/popDropped/size/trace/pendingEvent` 绛夛級锛宍CtEventLoop` 鏀规寔 `std::unique_ptr<CtQueueBase>`锛堥伩鍏嶆寜鍊煎熀绫诲垏鐗囦笌妯℃澘渚濊禆锛夛紝`CtEventSource::poll` 淇濈暀 `CtQueueBase&`銆偮?.3銆伮?.8銆伮?.10銆伮?.11銆伮?.12銆伮?0.1銆伮?2.2銆伮?3.3 鍚屾銆?- **缂栬緫灞傚洖鍐?*锛氣憼 搂8.1 Step 3 琛?灏?`event.accepted` 澶嶄綅涓?`false`"锛涒憽 搂7.8 `CtDispatcherBase` 鎴愬憳娓呭崟琛?`m_inDispatch`锛堜笌 搂9.2 濂戠害 #3 瀵归綈锛夛紱鈶?搂7.14 濂戠害 #1 鏄庣‘ `currentThreadId()` 鐢ㄥ钩鍙?API锛圵indows `GetCurrentThreadId`锛孧inGW 涓嬬ǔ瀹氾紱璺ㄥ钩鍙扮暀鎺ュ彛鎶借薄锛夛紝搂14 #1 鏍囪宸插叧闂€?3/#7 鍥炲啓姝ｆ枃銆?- **搂14**锛?1 **鍏抽棴**锛堢紪杈戝眰鍥炲啓 搂10.4/搂7.14锛夛紱#3 **宸茶瀹氬苟鍥炲啓**锛埪?.8 `m_inDispatch`銆伮?.2 濂戠害 #3锛夛紱#7 **宸茶瀹氬苟鍥炲啓**锛埪?.14 骞冲彴 API锛夛紱#2/#4/#5/#6/#8 鐘舵€佷笉鍙樸€?
+**Rev 4 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1鈥1-7 / P2-8鈥2-12 / P3锛?*锛?
+- **P1-1锛圢1 娈嬬暀鏃ц涔夛紝鍏ㄦ枃鏀瑰啓锛?*锛歱ush/post 渚ц `kQueued`/`kDropped`銆乸op 渚ц `kDispatched` 鐨勪竴鍒囨畫鐣欒〃杩板叏閮ㄦ敼鍐欎负瑁佸畾鏂规 (a)锛?*push/pop 涓€寰嬩笉璁?trace**锛沗kQueued`/`kDropped` 鍏ㄩ儴鐢?*褰掑睘绾跨▼**鍦ㄦ帓绌?婧㈠嚭澶勭悊鏃惰褰曪紙`CtEventLoop` 鎺掔┖寰幆缁?`popDropped()`/`trace()` friend 閫氶亾锛夛紱M1 鍗犱綅鏄庣‘"**涓嶈浠讳綍鐩镐綅**"銆傚悓姝ョ偣锛毬?.8 濂戠害 #8銆伮?.9 鐩镐綅娉ㄩ噴銆伮?.10 濂戠害 #6锛坄push` 鍙閿欒涓嶈鐩镐綅锛夈€伮?.11 濂戠害 #2銆伮?0.1 濂戠害 #3/#4锛?4 鐨?璁?kQueued 鍗犱綅鐩镐綅"鍒犻櫎鈥斺€斅?.8 濂戠害 #8 鑳滃嚭锛夈€伮?3.3 鐢ㄤ緥 #3銆俙CtEventLoop` 鎺掔┖浼爜鏇存柊涓?`while (auto pe = q.pop()) { dispatcher->dispatchAny(*pe); }`銆?- **P1-2锛坧ush 绛惧悕锛?*锛歚CtQueue::push` 绛惧悕鏀?`bool push(CtEvent<T>&& event);`鈥斺€斿彈鐞嗚繑鍥?`true`銆佹孩鍑鸿繑鍥?`false`锛沗post` 鎹杩斿洖 `kHandled`/`kUnhandled`銆備慨璁㈣褰曚腑"N1 瑁佸畾 push 杩斿洖 bool"鐨勫０鏄庝笌姝ｆ枃锛埪?.10 绛惧悕涓庡绾?#6銆伮?0.1 濂戠害 #3锛夌粺涓€涓?`bool`銆?- **P1-3锛坒riend 娓呭崟涓夋柟鐭涚浘锛?*锛氬紓姝ョ浉浣嶇敱 `CtQueue` 鐨?`popDropped()/trace()` 閫氶亾鍦?*褰掑睘绾跨▼**璁板綍鈥斺€擿CtQueue<EventSet>` 宸叉槸 friend锛?*涓嶅啀鏂板 `CtEventLoop` friend**銆俙CtDispatchContext` friend 娓呭崟缁熶竴涓?**4 涓?*锛歚CtTrace`銆乣CtDispatcherBase`銆乣CtDispatcher<EventSet>`銆乣CtQueue<EventSet>`锛浡?.6 濂戠害 #6 鏂囧瓧鍚屾锛堝垹闄?`CtEventLoop`锛夈€?- **P1-4锛堥槦鍒楁垚鍛樼紪璇戠骇锛?*锛歚CtEventLoop` 鐨?`CtQueueBase m_queue;`锛堟娊璞″熀绫绘寜鍊兼垚鍛樺繀鍒囩墖/涓嶅彲缂栬瘧锛夋敼 **`std::unique_ptr<CtQueueBase> m_queue;`**锛涙瀯閫犲嚱鏁板唴 `make_unique<CtQueue<EventSet>>(...)`锛岀粡 `setDispatcher<EventSet>` 妯℃澘瀹炰緥鍖栥€偮?.11 绛惧悕涓?搂7.12 濂戠害 #2锛坄poll(CtQueueBase&)` 瀹炲弬褰㈡€侊級鑱斿姩鏍稿銆?- **P1-5锛堝洓涓己澶卞畾涔夎ˉ鍏級**锛氣憼 `CtPendingEvent<EventSet>` **瀹屾暣瀹氫箟**锛坄weak_ptr<CtReceiver>` 鐩爣 + `CtAnyEvent` 杞借嵎 + priority/sequence锛夛紱鈶?`CtQueueBase` **绫诲瀷鎿﹂櫎鎺ュ彛瀹屾暣瀹氫箟**锛坄push/pop/popDropped/size/trace/pendingEvent` 绾櫄绛夛級锛涒憿 `CtDispatcherBase::dispatchAny` 澹版槑锛埪?.8锛夛紱鈶?闃熷垪瀛樺偍鏄庣‘涓?`deque<CtPendingEvent<EventSet>>`锛堜笌 P1-3 鑱斿姩锛氬畾鍚戞姇閫掗渶鎼哄甫鐩爣 receiver锛夈€偮?.3銆伮?.10銆伮?.11銆伮?.12銆伮?0.1銆伮?3.3 鍚屾銆?- **P1-6锛坧ost 璺敱鏈哄埗缂哄け锛?*锛氳ˉ榻?绾跨▼ 鈫?CtEventLoop 鈫?CtQueue"鐨勬敞鍐?鏌ユ壘鏈哄埗锛歚CtEventLoop::current()`锛?*姣忕嚎绋?TLS 闈欐€佸嚱鏁?*锛岃繑鍥炲綋鍓嶇嚎绋嬬殑 loop 鎸囬拡锛? `CtEventLoop::attachToCurrentThread()`锛沗post(receiver, ev)` 缁?`receiver->affinityThread()` 鈫?鏌?loop 鈫?鍏ラ槦銆偮?.11 濂戠害鏂板锛浡?0.1 濂戠害 #1/#2 寮曠敤銆?- **P1-7锛堥敊璇枃浠跺懡鍚嶄笉涓€鑷达級**锛氱粺涓€涓?**`ct_errors.h`**锛埪?.3 鐨勫啓娉曪級锛浡?.13 鏍囬浠?`ct_event_error.h` 鏀逛负 `ct_errors.h`锛屾枃浠跺竷灞€鍚屾锛沗CtAffinityError`/`CtNoQueueError` **琛ュ畾涔?*锛堢畝鐭紝褰掑叆 `CtEventErrorKind` 鏋氫妇锛歚kWrongThread` 宸叉湁銆佹柊澧?`kNoQueue` 鏇夸唬 `CtNoQueueError`锛沗CtAffinityError` 鍗?`kWrongThread` 鐨勯敊璇被鍨嬪埆鍚嶈涔夛紝琛?`CtEventError` 渚挎嵎鏋勯€狅級銆?- **P2-8锛坕nclude 鑷寘鍚級**锛毬?.10 `ct_queue.h` 鐨?include 琛?`ct_thread_affinity.h`锛堢鍚嶇敤 `CtThreadId` 蹇呴』鑷寘鍚級銆?- **P2-9锛圕tQueue 褰掑睘缁熶竴锛?*锛歚CtQueue` 鍐呭祵 **`CtThreadAffinity m_affinity`**锛堟瀯閫犺褰曞綋鍓嶇嚎绋嬶級锛屽垹闄ゆ瀯閫犵鍚嶉噷鐨勮８ `CtThreadId` 鍙傛暟锛沗affinityThread()` 濮旀墭 `m_affinity.thread()`銆偮?.14 濂戠害 #2/#6銆伮?0.2 琛ㄥ悓姝ャ€?- **P2-10锛坅ccepted 澶嶄綅鍥炲啓锛?*锛毬?.1 Step 3 鏄庣‘"灏?`event.accepted` 澶嶄綅涓?`false`"锛堜笌 搂7.3 濂戠害 #6 寮曠敤瀵归綈锛夛紱搂8.2 Step 3 鍚屾銆?- **P2-11锛堝钩鍙?API 瑁佸畾鍥炲啓锛?*锛毬?.14 濂戠害 #1 鏄庣‘ `currentThreadId()` 鐢?Windows `GetCurrentThreadId`锛圡inGW 涓嬬ǔ瀹氾級锛岃法骞冲彴鐣欐帴鍙ｆ娊璞★紱鍒犻櫎"std::hash<std::thread::id> 鎴栧钩鍙?API"鐨勬憞鎽嗚〃杩般€?- **P2-12锛坰end 瀹氬悜鏌ユ壘绛栫暐瀹氭锛?*锛毬?.1 Step 6 M1 瀹炵幇绛栫暐瀹氫负"**閬嶅巻蹇収鍚戦噺銆乣lock()` 鍚庢瘮瀵?`objectId`**"锛圡1 瑙勬ā鍙帴鍙楋級锛屽苟娉ㄦ槑 M4 鍙紩鍏ユ寜 receiver 鐨勫垎缁勭储寮曘€?- **P3 娓呯悊锛圧ev 4锛?*锛氣憼 `CtHandlerToken` 鎴愬憳娓呭崟缁熶竴锛埪?.4 鐨?`m_id` 涓?搂7.7 鐨勪粎 `m_state`鈥斺€旂粺涓€涓虹粡 `m_state->id` 鍙?`id()`锛宍CtHandlerToken` 涓嶅啀鎸佹湁 `m_id`锛夛紱鈶?`CtDispatcherBase::trace()` 涓?`CtDispatcher::trace() const` 鍚屽悕闅愯棌闂鈥斺€?*娉ㄦ槑鍗冲彲**锛堟淳鐢熺被 const 鐗堟湰闅愯棌鍩虹被闈?const 鐗堟湰锛屽睘棰勬湡锛涘疄鐜颁晶淇濈暀鍩虹被 `trace()` 渚涘唴閮ㄤ娇鐢級锛涒憿 搂14 #1 鏍囨敞"宸插叧闂?锛堜笌淇璁板綍涓€鑷达級銆?
+**Rev 5 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1鈥1-6 / P2-1鈥2-6 / P3锛?*锛?
+- **P1-1锛堟摝闄よ竟鐣?pop 涓嶅彲瑕嗗啓锛?*锛歚CtQueueBase::pop()` 杩斿洖 `std::optional<CtPendingEventBase>` **涓嶅彲瀹炵幇**锛堟娊璞″熀绫绘棤娉曟寜鍊煎叆 optional锛屼笖 `std::optional` 鏃犺繑鍥炵被鍨嬪崗鍙橈紝娲剧敓 `optional<CtPendingEvent<EventSet>>` 涓嶆瀯鎴愯鍐欙級鈫?**閲嶅畾涓?`front(CtPendingEventBase*&)` + `popFront()` 寮曠敤璇箟**锛堥浂鍫嗐€侀浂鎷疯礉銆佹棤鍒囩墖锛沗CtPendingEvent<EventSet>` 缁ф壙闈炴娊璞?`CtPendingEventBase`锛屄?.5 杈圭晫绫诲瀷鍏蜂綋鍖栵級銆偮?.10 濂戠害 #3/#7銆伮?.11 濂戠害 #2 鎺掔┖浼爜銆伮?3.3 鐢ㄤ緥 #2/#3 鍚屾銆?- **P1-2锛圕tQueue 鏈鍐?pushAny锛?*锛氳ˉ `CtQueue::pushAny(std::unique_ptr<CtAnyEventBase>, ...)` 鍏蜂綋瑕嗗啓锛沗detail::CtAnyEventBase` 閲嶅畾涓?*鍏蜂綋鍙寔鏈?variant 鐨勭被鍨?*锛坄pushAny` 鎵€鏈夋潈杞Щ锛屽紓姝ヨ矾寰勫厑璁镐竴娆″爢鍒嗛厤锛屄?.5/搂7.10 濂戠害 #7/搂11.2锛夈€?- **P1-3锛坉ispatchAny protected 璁块棶锛?*锛歚CtDispatcherBase` 琛?**`friend class CtEventLoop;`**锛坄exec` 鎺掔┖璋冪敤 `dispatchAny`锛屼笌 `CtHandlerToken` 鍚岀悊锛屄?.8 friend 娓呭崟锛夈€?- **P1-4锛堝惊鐜?include锛?*锛歚ct_receiver.h` **绉婚櫎** `#include "ct_dispatcher.h"`锛屾敼**鍓嶇疆澹版槑** `template <typename EventSet> class CtDispatcher;`锛坄bindHandler` 鍙湪瀹炰緥鍖栨湡瑙ｆ瀽渚濊禆鍚嶏紱`ct_dispatcher.h` 鏄?鏇村瘜"鐨勫ご锛屽畠 include `ct_receiver.h`锛屄?.5锛夈€?- **P1-5 / P1-6锛堝ご鑷寘鍚級**锛歚ct_event_loop.h` 琛?`#include "ct_dispatcher.h"`锛沗ct_event_source.h` 琛?`#include "ct_queue.h"`锛埪?.11/搂7.12锛夈€?- **P2-1锛坘Queued/kDropped 璁板綍閫氶亾锛?*锛氳瀹氭柟妗?(a)鈥斺€擿kQueued` 鐢?**`CtQueue::front()` 鎴愬姛鏃惰褰?*锛堥槦鍒楁槸 `CtDispatchContext` friend銆佸綊灞炵嚎绋嬭皟鐢紝鏃犳暟鎹珵浜夛級锛沗kDropped` 鐢?**`CtQueue::popDropped()` 鍐呴儴鎸夎鏁拌褰?*銆傝褰曚富浣撶粺涓€涓?`CtQueue`锛宭oop 涓嶇洿鎺ユ瀯閫?ctx锛埪?.6 濂戠害 #6銆伮?.10 濂戠害 #6銆伮?.11 濂戠害 #2锛夈€?- **P2-2锛圕tEvent sequence/priority 鏃犲啓鍏ユ満鍒讹級**锛歚CtEvent` 琛?**`friend class CtDispatcherBase; template <typename> friend class CtQueue;`** 涓庣鏈?`setSequence(uint64_t)/setPriority(uint64_t)`锛埪?.3锛浡?.1 Step 3 涓?搂10.3 鐨勫啓鍏ヨ惤鐐癸級銆?- **P2-3锛堥槦鍒楀垱寤烘椂鏈猴級**锛歚CtEventLoop` 鐨?`m_queue` 鏀?*鍦?`setDispatcher<EventSet>` 鍐呮儼鎬у垱寤?*锛堟瀯閫犲嚱鏁拌繍琛屾椂 EventSet 鏈煡锛屾棤娉曞疄渚嬪寲 `CtQueue<EventSet>`锛夛紱`queue()` 鍔犲墠缃潯浠?蹇呴』鍏?setDispatcher"锛埪?.11 濂戠害 #3锛夈€?- **P2-4锛堣矾鐢辨槧灏勭敓鍛藉懆鏈燂級**锛歚~CtEventLoop` 濂戠害**浠?TLS 涓庣嚎绋嬧啋loop 鏄犲皠绉婚櫎鑷韩**锛沺ost 渚ф牎楠岀洰鏍?loop 瀛樻椿锛埪?.11 濂戠害 #7锛夈€?- **P2-5锛堟摝闄ょ被鍨嬫枃浠惰惤鐐癸級**锛歚CtPendingEventBase` 瀹氫负鍏紑绫诲瀷锛堣惤鐐?`ct_queue.h`锛夛紱`detail::CtAnyEventBase` 瀹氫负瀹炵幇缁嗚妭锛堣惤鐐?`ct_queue.h`/`ct_dispatcher.h`锛夆€斺€旈兘涓嶈繘 搂5.3 鍏紑甯冨眬锛屾敞鏄庡涓诲ご锛埪?.5 娉ㄨ锛夈€?- **P2-6锛圕tHandlerToken 涓ゅ涓嶄竴鑷达級**锛毬?.4 鍚屾 搂7.7锛堝垹 `m_id` 鎴愬憳涓?`reset()`锛宍id()` 缁?`m_state->id` 鍙栧€硷級锛屾爣娉?搂6.4 涓烘憳褰曘€伮?.7 鏉冨▉銆?- **P3 钀芥鏂囷紙Rev 5锛?*锛氣憼 搂7.8 濂戠害 #9 琛?`trace()` 鍚屽悕闅愯棌娉ㄦ槑锛涒憽 搂14 #1 鏍?宸插叧闂?銆?3/#7 鏍?宸茶瀹?锛涒憿 搂11.2 闃熷垪閿佽銆伮?3.3 鐢ㄤ緥鍚屾 front/popFront銆?
+**Rev 6 淇瑕佺偣锛堝搴斿鏌ヨ鍐?N-1鈥-13锛?*锛?
+- **N-1锛圡1 闃诲锛?*锛歚ct_receiver.h` 琛?`#include "ct_handler_token.h"`锛坄bindHandler` 杩斿洖 `CtHandlerToken`锛屽ご蹇呴』鑷寘鍚紝搂7.5锛夈€?- **N-2锛圡1 闃诲锛?*锛歚ct_dispatcher.h` 琛?`namespace crisp::event { class CtPendingEventBase; }` 鍓嶇疆澹版槑锛坄dispatchAny(CtPendingEventBase&)` 寮曠敤鍙傛暟鍙渶澹版槑锛涘畬鏁村畾涔夊湪 `ct_queue.h`锛圡2锛夛紝`CtEventLoop` 璋冪敤鐐规彁渚涘畬鏁寸被鍨嬶紝搂7.8锛夈€?- **N-3锛圡2锛?*锛氭摝闄よ竟鐣屾媶涓ゅ眰鈥斺€擿detail::CtAnyEventBase`锛?*闈炴ā鏉挎帴鍙?*锛岀函铏?`payloadTypeKey/payloadPtr`锛? `detail::CtAnyEventHolder<EventSet>`锛?*妯℃澘鍏蜂綋鎸佹湁鑰?*锛屾寔鏈?variant锛夈€俙CtQueueBase::pushAny` 鏀?`std::unique_ptr<detail::CtAnyEventBase>`锛堟棤妯℃澘瀹炲弬闂锛夛紝`CtQueue<EventSet>::pushAny` 閿柇瑷€鍚?`static_cast` 鍒?Holder锛埪?.5/搂7.10锛夈€?- **N-4锛圡2锛?*锛氶槦鍒楀瓨鍌ㄤ笌 `pushAny` 鐨?priority 缁熶竴涓?*浜嬩欢鐨?`uint64_t` 鎺掑簭鎻愮ず**锛坄CtEvent::priority()`锛屄?.3锛夛紱`CtHandlerPriority` 浠呬繚鐣欎綔杩囨护鍣ㄦ帓搴忛敭锛埪?.15锛夈€俙CtPendingEventBase::priority()` 杩斿洖 `uint64_t`锛埪?.10/搂10.3锛夈€?- **N-5锛圡2 姝ｇ‘鎬э級**锛氭帓绌轰吉鐮?*涓嶅啀鐢?`target().expired()` 鍒ゅ畾涓㈠純**鈥斺€旂┖ `weak_ptr`锛堝箍鎾潯鐩級鐨?`expired()` 杩斿洖 true 浼氶潤榛樹涪寮冩墍鏈夊紓姝ュ箍鎾€傛敼涓?`isBroadcast()`锛堢┖ target = 蹇呴』鎶曢€掞級vs 闈炵┖涓?`lock()` 澶辫触锛堣烦杩?+ `kDropped`锛夛紙搂7.11 濂戠害 #2锛夈€?- **N-6锛圡2锛?*锛歚post` 鍏ラ槦璺緞瀹氭涓?*缁忔摝闄よ竟鐣?`CtQueueBase::pushAny`**锛堣矾鐢卞彧缁?`CtQueueBase&`锛屾姇閫掍晶鏃犳硶鑾风煡鍏蜂綋 EventSet锛涘己绫诲瀷 `CtQueue<EventSet>::push` 鍙湪 EventSet 宸茬煡澶勭敤锛夛紙搂10.1 濂戠害 #5锛夈€?- **N-7锛圡2锛?*锛?*璺?EventSet 鎶曢€掑绾?*鈥斺€擿post/postTo` 瑕佹眰鐩爣 loop EventSet 涓庡彂閫佹柟涓€鑷达紱涓嶄竴鑷存椂 `pushAny` 閿柇瑷€澶辫触 鈫?涓㈠純 + `kDropped` + `kTypeNotInSet`锛宲ost 杩斿洖 `kUnhandled`锛埪?0.1 濂戠害 #5锛夈€?- **N-8锛圡1 缂栬瘧锛?*锛歚CtEvent` 涓や釜鏋勯€犻噸杞藉姞 `enable_if` 娑堟锛堥鍙備负 `CtEventOrigin` 鏃朵粎 origin-first 閲嶈浇鍙備笌锛沗CtEvent<T>(CtEventOrigin::kApplication)` 涓嶅啀浜屼箟锛夛紙搂7.3锛夈€?- **N-9锛圥3锛?*锛歚CtPendingEventBase` 鎺緸缁熶竴涓?鎶借薄鍩虹被銆佷粎寮曠敤璇箟"锛堢函铏?`payloadTypeKey/payloadPtr` 涓?CONCRETE 闈炴娊璞?琛ㄨ堪鐭涚浘锛夛紙搂6.5/搂7.10 濂戠害 #7锛夈€?- **N-10锛圥3锛?*锛歚kDropped` 鐨?鐩爣宸蹭骸"璁板綍鐐硅ˉ涓娾€斺€旀帓绌烘椂闈炵┖ target 浣?`lock()` 澶辫触 鈫?`dispatchAny` 璁?`kDropped`锛埪?.10 濂戠害 #6銆伮?.11 濂戠害 #2锛夈€?- **N-11锛圥3锛?*锛歚~CtHandlerToken() noexcept` 涓ゅ缁熶竴锛埪?.4/搂7.7锛夈€?- **N-12锛圥3锛?*锛歚m_inDispatch` 鏉′欢缂栬瘧缁熶竴鈥斺€擿#if defined(NDEBUG)` 绌烘垚鍛?/ 鍚﹀垯 `size_t`锛埪?.8 鎴愬憳娓呭崟涓?搂9.2 濂戠害 #3 涓€鑷达級銆?- **N-13锛圥3锛?*锛歚ct_dispatcher.h` 鏄惧紡 `#include "ct_thread_affinity.h"`锛坄m_affinity` 鎴愬憳鐩存帴渚濊禆锛屼笉闈?`ct_receiver.h` 浼犻€掑寘鍚級锛埪?.8锛夈€?
+**Rev 7 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1鈥1-3 / P2-1鈥2-4锛?*锛?
+- **P1-1锛坕sBroadcast 瀹炵幇灞傛湭淇锛?*锛歚CtPendingEventBase::isBroadcast()` 鏀?*鏋勯€犳椂鍥哄寲鏍囧織**鈥斺€擿CtPendingEvent<EventSet>` 鐨勬瀯閫犲櫒鐢?`owner_before` 鍒ょ┖锛?push 鏃?target 鏄惁涓虹┖"锛夛紝瀛?`m_isBroadcast`锛?*涓嶅啀鐢ㄦ椿鐨?`expired()` 妫€鏌?*锛堢┖ weak_ptr 涓庡凡浜?weak_ptr 鐨?`expired()` 閮借繑鍥?true锛屾棤娉曞尯鍒?骞挎挱蹇呴』鎶曢€?涓?鐩爣宸蹭骸璺宠繃"锛夈€偮?.5銆伮?.10 濂戠害 #7銆伮?.11 濂戠害 #2 涓夊鍚屾锛埪?.5/搂7.10锛夈€?- **P1-2锛圕tDispatchTables 鍛藉悕绌洪棿涓嶄竴鑷达級**锛歚CtDispatchTables` **绉诲叆 `crisp::event::detail`**锛堢函瀹炵幇缁嗚妭锛屼笌 搂7.8 鐨?`detail::CtDispatchTables` 寮曠敤涓€鑷达級锛浡?.5 浠ｇ爜鍧楀懡鍚嶇┖闂存敼涓?`namespace crisp::event::detail`锛埪?.5锛夈€?- **P1-3锛坢_inDispatch 鏉′欢缂栬瘧鍒嗘敮鐩稿悓锛?*锛歚#if defined(NDEBUG)` 鍒嗘敮鏀?*绌烘垚鍛?*锛坄[[maybe_unused]] char m_inDispatchPadding`锛夛紝`#else` 鍒嗘敮淇濈暀 `size_t m_inDispatch`鈥斺€斾袱鍒嗘敮鐪熸涓嶅悓锛屼笌 搂9.2 濂戠害 #3"release 闆跺紑閿€"瀵归綈锛埪?.8锛夈€?- **P2-1锛坧riority 鏃犲叕寮€璁剧疆璺緞锛?*锛歚CtEvent::setPriority(uint64_t)` 鏀?**public**锛堟瀯閫犻噸杞藉彧杞彂缁?T 鐨勮浇鑽锋瀯閫狅紝搴旂敤渚ч渶鍏紑 setter 浜х敓闈為浂 priority 渚?搂10.3 闃熷垪鎺掑簭锛沗setSequence` 浠嶇鏈夛級锛埪?.3锛夈€?- **P2-2锛圕tAnyEventHolder 缂?move 璁块棶鍣級**锛氳ˉ**闈?const `any_event& value() noexcept`**锛坄CtQueue<EventSet>::pushAny` 闇€ move variant 杩?pending_event锛宑onst& 鏃犳硶 move锛夛紙搂6.5锛夈€?- **P2-3锛圕tDispatcherBase 缂?token-state 闆嗗悎锛?*锛氭垚鍛樻竻鍗曡ˉ **`std::vector<std::weak_ptr<detail::CtTokenState>> m_tokenStates;`**锛坄makeTokenState` 鐧昏銆乣unregisterHandler` 绉婚櫎銆佹瀽鏋勬寔閿佺炕杞墍鏈?token 鐨?alive鈥斺€斅?.2 濂戠害 #1 鐨勮惤鐐癸級锛沗ct_dispatcher.h` include 琛?`<vector>`锛埪?.8锛夈€?- **P2-4锛坋nable_if 鍙秷姝у崟鍙傦級**锛歚CtEvent` 鏋勯€犻噸杞界殑 `enable_if` 鏉′欢鎵╀负**"棣栧弬涓?`CtEventOrigin` 鍗虫帓闄?**锛坄sizeof...(Args) >= 1 && first is CtEventOrigin` 鏃?generic 閲嶈浇涓嶅弬涓庘€斺€擿(origin, args...)` 澶氬弬褰㈡€佷笉鍐嶈杞彂寮曠敤閲嶈浇鎹曡幏锛夛紱鍒犻櫎璇娉ㄩ噴锛埪?.3锛夈€?
+**Rev 8 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1鈥1-5 / P2-1鈥2-8锛?*锛?
+- **P1-1锛圕tEvent 缂?CtDispatcher friend锛?*锛歚CtEvent<T>` 绉佹湁鍖鸿ˉ **`template <typename> friend class CtDispatcher;`**鈥斺€擟++ 鍙嬪厓涓嶇户鎵匡紝`CtDispatcherBase` 鐨勫弸鍏冭祫鏍间笉寤朵几鍒版ā鏉挎淳鐢熺被 `CtDispatcher<EventSet>`锛岃€?搂8.1/搂8.2 Step 3 鐨?`event.setSequence(...)` 姝ｆ墽琛屼簬 `CtDispatcher<EventSet>::send/broadcast`锛埪?.3锛夈€?- **P1-2锛坕sBroadcast owner_before 鏂瑰悜锛?*锛氬垽绌鸿〃杈惧紡鏀?**`m_isBroadcast = !std::weak_ptr<CtReceiver>{}.owner_before(target)`**鈥斺€旈粯璁ょ┖ weak_ptr 鏄弗鏍煎急搴忔渶灏忓厓锛宍empty.owner_before(target)` 鎭板湪 target 闈炵┖鏃朵负 true锛?*鍙嶅悜 `target.owner_before(empty)` 鎭?false 浼氭妸鎵€鏈夊畾鍚戜簨浠舵爣璁颁负骞挎挱**銆偮?.5/搂7.10 浼爜缁熶竴锛埪?.5/搂7.10锛夈€?- **P1-3锛坈tx鈫攖race 寰幆 include锛?*锛?*`CtTracePhase` 绉诲叆 `ct_event.h`**锛埪?.3锛夛紱`ct_dispatch_context.h` **涓嶅緱** include `ct_trace.h`锛堝彧浠?`ct_event.h` 鍙?`CtTracePhase`锛夛紱`ct_trace.h` 淇濈暀 include `ct_dispatch_context.h`锛埪?.6/搂7.9锛夈€俰nclude 鍥撅細ctx鈫抏vent锛宼race鈫抍tx鈫抏vent锛屾棤鐜€?- **P1-4锛坈t_handler_token.h 缂哄墠缃０鏄庯級**锛氭枃浠跺紑澶磋ˉ **`namespace crisp::event { class CtDispatcherBase; }`**锛坄detail::CtTokenState::owner` 鏄?`weak_ptr<CtDispatcherBase>`锛屽厛浜庝换浣曞０鏄庡嚭鐜帮級锛埪?.7锛夈€?- **P1-5锛圕tDispatcher 婕?dispatchAny override锛?*锛歚CtDispatcher<EventSet>` 绉佹湁鍖鸿ˉ **`void dispatchAny(CtPendingEventBase& pending) override;`**鈥斺€斿惁鍒欏熀绫荤函铏氭湭瀹炵幇銆乣CtDispatcher` 鎶借薄銆乣make_shared` 涓嶅彲缂栬瘧锛埪?.8锛夈€?- **P2-1锛圗rasedHandler/Filter/Observer 鏈畾涔夛級**锛毬?.5 琛?*绮剧‘瀹氫箟**锛歚ErasedHandler = std::function<void(const void*)>`锛坋vent = CtEvent<T>*锛夈€乣ErasedFilter = std::function<bool(const void*)>`锛坋vent = const CtEvent<T>*锛夈€乣ErasedObserver = std::function<void(const void*, CtTracePhase)>`锛坋vent = const CtEvent<T>*锛夆€斺€旀敞鍐屾椂鏋勯€犮€侀敭鍖归厤鏂█鍚庤皟鐢紙搂6.5锛夈€?- **P2-2锛坈t_event.h 缂?`<tuple>`锛?*锛歚enable_if` 鐢?`std::tuple_element_t`锛宨nclude 琛?`<tuple>`锛埪?.3锛夈€?- **P2-3锛坈t_dispatcher.h 缂?`<unordered_map>`锛?*锛歚detail::CtDispatchTables` 鐢?`unordered_map`锛宨nclude 琛?`<unordered_map>`锛埪?.8锛夈€?- **P2-4锛坘Dropped 璁板綍鐐圭煕鐩撅級**锛氭帓绌哄惊鐜?*涓嶈烦杩?`dispatchAny`**鈥斺€斿箍鎾笌瀹氬悜閮借皟锛沗dispatchAny` 鍐呴儴鍒ゅ畾锛歚isBroadcast()`锛堟姇閫掑叏琛級/ 闈炲箍鎾笖 `lock()` 澶辫触锛?*璁?`kDropped` 骞惰烦杩?*锛夈€傜粺涓€"鐩爣宸蹭骸鐨?kDropped 鐢?dispatchAny 璁板綍"锛埪?.10 濂戠害 #6銆伮?.11 濂戠害 #2锛夈€?- **P2-5锛堥噸鍙犻泦鍚堣法 EventSet 妫€娴嬪け鏁堬級**锛歚CtAnyEventBase` 琛?*绾櫄 `eventSetId()`**锛宍CtAnyEventHolder<EventSet>` 浠?*鍦板潃娲剧敓閿?*锛埪?.1 鏂规锛夊疄鐜帮紱`CtQueue<EventSet>::pushAny` 鏂█ `holder.eventSetId() == EventSet 鑷韩閿甡 **鍚庡啀 cast**锛坧ayloadTypeKey 鏂█瀵瑰叡浜被鍨?T 鐨勯噸鍙犻泦鍚堜笉澶燂級锛埪?.5銆伮?0.1 濂戠害 #5锛夈€?- **P2-6锛堥槦鍒楀垱寤烘椂鏈虹煕鐩撅級**锛氱粺涓€涓?**`CtEventLoop` 鍦?`setDispatcher<EventSet>` 鍐呭垱寤洪槦鍒?*锛堟瀯閫犳椂 EventSet 鏈煡锛夛紱**褰掑睘 = 璋冪敤 setDispatcher 鐨勭嚎绋嬶紙蹇呴』涓?loop 绾跨▼锛孧2 鏂█锛?*锛沗queue()` 鍓嶇疆鏉′欢锛埪?0.2 濂戠害 #4銆伮?.11 濂戠害 #3锛夈€?- **P2-7锛堝紓姝?sequence 鎮┖锛?*锛歚CtPendingEvent<EventSet>` 鏋勯€犵鍚嶈ˉ **`uint64_t sequence` 鍙傛暟**锛坧ush 渚т粠 `CtEvent::sequence()` 鎷疯礉锛屄?.3 鐨?`CtQueue` friend 閫氶亾钀藉湴锛夛紙搂7.10锛夈€?- **P2-8锛坒riend 娉ㄩ噴璇锛?*锛毬?.3 娉ㄩ噴鏀瑰啓鈥斺€旀槑纭?`CtDispatcherBase` 涓?`CtDispatcher<EventSet>` **閮芥槸** friend锛堝弸鍏冧笉缁ф壙锛夛紙闅?P1-1锛夈€?
+**Rev 9 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1鈥1-4 / P2-1鈥2-4 + P3锛?*锛?
+- **P1-1锛堟摝闄ゅ洖璋冪鍚嶄笉瀵归綈 搂5.2锛?*锛歚ErasedObserver` 鏀?**`std::function<void(const void*, const CtDispatchContext&)>`**锛堢浉浣嶇粡 `ctx.phase()`锛岃瀵熻€呴渶瀹屾暣涓婁笅鏂?receiverId/filterIndex/elapsed/handlerCount锛宍CtTracePhase` 鍙傛暟鎵胯浇涓嶄簡锛寃rapper 鏃犳硶浼€?ctx鈥斺€斅?.6 绉佹湁鏋勯€狅級锛沗ErasedHandler`/`ErasedFilter` 鏀?*闈?const `void*`**锛堜笌 搂5.2 `CtHandler<T>`/`CtFilter<T>` 闈?const 浜嬩欢瀵归綈锛屽幓鎺?const_cast 闇€瑕侊級锛埪?.5锛夈€?- **P1-2锛圕tHandlerToken 鏋勯€犺闂己鍙ｏ級**锛歚CtHandlerToken` 绉佹湁鍖鸿ˉ **`template <typename> friend class CtDispatcher;`**鈥斺€旈潪绌?token 鍦?`CtDispatcher<EventSet>::addHandler` 鏋勯€狅紝鍙嬪厓涓嶇户鎵匡紙涓?搂7.3 CtEvent 鍚屽瀷闂锛夛紙搂7.7 濂戠害 #5锛夈€?- **P1-3锛堝悓姝ュ箍鎾潯鐩 lock() 璺宠繃锛?*锛毬?.2 Step 6 骞挎挱鏉＄洰**娉ㄥ唽鏃跺浐鍖栧垽绌?*鈥斺€攔eceiver 涓虹┖锛坄owner_before` 鍒ょ┖锛? 骞挎挱鏉＄洰**鏃犳潯浠惰皟鐢?*锛涢潪绌轰笖 `lock()` 澶辫触锛堝凡浜★級= 璺宠繃锛堜笌寮傛 `isBroadcast` 鍚屽瀷淇锛孯ev 8, P1-3锛夛紙搂8.2 Step 6锛夈€?- **P1-4锛圡1 dispatchAny 鏃犲畾涔?鈫?閾炬帴澶辫触锛?*锛毬?2.1 鏄庣‘ **M1 鎻愪緵涓嶅彲杈?stub 瀹氫箟**锛坄assert(false)` 绌轰綋锛屽紩鐢ㄥ弬鏁颁笉闇€瀹屾暣绫诲瀷锛夛紱**M2 鐪熷疄瀹氫箟**钀界偣锛歚ct_dispatcher.h` include `ct_queue.h` 鍚庡疄鐜帮紙include 鏂瑰悜鏃犵幆锛夛紙搂12.1 step 9銆伮?.8 dispatchAny 娉ㄩ噴锛夈€?- **P2-1锛堝紓姝?sequence 璇箟鍒嗚锛?*锛氬畾**鍗曚竴浜嬪疄鏉ユ簮**鈥斺€攑ush 渚э紙`CtQueue<EventSet>` 鏄?CtEvent friend锛夊厛 `setSequence()` 鍐嶆嫹璐濊繘 pending = **鍏ラ槦搴?*锛涘悓姝ヨ矾寰?搂8.1 Step 3 鐩存帴璧嬪€硷紱鎺掔┖渚т笉閲嶈祴鍊硷紙搂6.5/搂7.10 `sequence()` 娉ㄩ噴銆乣CtPendingEvent` ctor锛夈€?- **P2-2锛圕tEventLoop 缂烘簮鎸傛帴锛?*锛氳ˉ **`attachSource/detachSource`** API + **`m_sources` 瀹瑰櫒**锛坰hared_ptr锛屄?1.5锛夛紱**娉ㄥ叆璺緞瀹氭**锛歭oop 鎻愪緵妯℃澘妗?`injectEvent<EventSet>`锛堜笅杞瀷鍒板叿浣?`CtQueue<EventSet>&` 鍚庡己绫诲瀷 `push`锛夋垨婧愭ā鏉垮寲锛堜簩閫変竴锛夛紱`pushAny` 鐨?`eventSetId()` 鏂█鍏滃簳璺ㄩ泦鍚堣娉ㄥ叆锛埪?.11/搂7.12 濂戠害 #6锛夈€?- **P2-3锛埪?.3 甯冨眬鑴辫妭锛?*锛歚ct_event.h` 琛屾爣娉?`CtTracePhase`锛圧ev 7 P1-3 绉诲叆锛夛紱`ct_trace.h` 琛屾敞鏄?鐩镐綅浠?ct_event.h 鍙?锛沗ct_event_loop.h` 琛岃ˉ `attachSource`锛埪?.3锛夈€?- **P2-4锛堥槦鍒?EventSet == dispatcher EventSet 涓嶅彉閲忥級**锛歚setDispatcher` 瀹?*纭绾?*鈥斺€斿悓 `EventSet` 浠呬竴娆°€侀噸澶嶏紙鍚紓 `EventSet`锛夋嫆缁濆苟鏂█锛沗CtPendingEventBase` 琛?**`eventSetId()`**锛堝湴鍧€娲剧敓锛屄?.1锛変緵鎺掔┖渚?`dispatchAny` 鍙岄噸鏂█锛坧ayloadTypeKey + set 韬唤锛夛紙搂7.11 濂戠害 #3銆伮?.5/搂7.10銆伮?0.1 濂戠害 #5锛夈€?- **P3 娓呯悊锛圧ev 9锛?*锛氣憼 搂14 #3 鎺緸 `inDispatch_` 鈫?`m_inDispatch`锛涒憽 璺?EventSet 鎷掔粷涓庢孩鍑?*閮藉苟鍏?`m_dropped`**锛堣 `kDropped`锛夛紝`kTypeNotInSet` 浠呬綔閿欒绫诲埆涓嶅崟寮€璁℃暟锛涒憿 搂7.10 濂戠害 #2 鎺緸绮剧‘鍖栵紙寮虹被鍨?`push` 鐩存帴鏋勯€?pending锛宍std::visit` 浠呭睘 `pushAny`锛夛紱鈶?`pushAny` 鐨?priority/sequence 鏉ユ簮鏄庣‘锛坄std::visit` 璇?variant 鍐呬簨浠讹級锛涒懁 搂7.9 `record` 鎸夊€?`CtDispatchContext` 涓?搂7.6 濂戠害鏂囧瓧瀵归綈銆?
+**Rev 10 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1 / P2-1鈥2-4 + P3锛?*锛?
+- **P1-1锛坉ispatchAny 寮傛渚嬪锛?*锛毬?.8 `dispatchAny` 娉ㄩ噴 + 搂8.1 Step 3 琛?*寮傛渚嬪**鈥斺€旀帓绌鸿矾寰?*璺宠繃 sequence 閲嶈祴鍊?*锛坧ending 宸插湪 push 渚?stamp 鍏ラ槦搴忥級锛屼繚鐣?`accepted` 澶嶄綅涓?`kDispatched` 璁板綍锛堣鍏ラ槦搴忥級锛涘悓姝?`send` 鎵嶉噸璧嬪€硷紙搂7.8銆伮?.1 Step 3锛夈€?*寮傛璁℃暟鍣ㄦ潵婧?*锛歚CtQueue` 琛?**`m_seqCounter`**锛坧ush/pushAny 鎸?`m_mutex` 鑷骞?stamp锛夛紝涓?dispatcher 鍚屾璁℃暟鏄?*涓や釜鐙珛閿┖闂?*锛埪?.10 濂戠害 #9锛夈€?- **P2-1锛坕njectEvent 瀹夊叏缃?+ 澹版槑 + 绛惧悕锛?*锛歚CtQueueBase` 琛?**`virtual uint64_t eventSetId() const noexcept = 0;`**锛坕njectEvent 涓嬭浆鍨嬪墠鏍￠獙鈥斺€斿己绫诲瀷 `push` 涓嶇粡杩?`pushAny` 鐨勬柇瑷€锛夛紱`injectEvent` **琛ヨ繘 搂7.11 绫诲畾涔?*涓斿啓鍏?**`template <typename EventSet, typename T>`**锛圱 鐢卞疄鍙傛帹瀵硷級锛埪?.11銆伮?.12 濂戠害 #6锛夈€?- **P2-2锛圕tQueue 缂?m_trace锛?*锛歚CtQueue` 绉佹湁鎴愬憳琛?**`CtTrace m_trace;`**锛坄front` 璁?kQueued銆乣popDropped` 璁?kDropped 鐨勮惤鐐癸級锛埪?.10锛夈€?- **P2-3锛坉ispatcher shared_ptr 鎵€鏈夋潈鏈０鏄庯級**锛毬?.8 绫绘敞閲婅ˉ**寮哄埗澹版槑**鈥斺€擿CtDispatcher` 蹇呴』 `make_shared` 鎸佹湁锛坄enable_shared_from_this` + `makeTokenState` 渚濊禆 `shared_from_this()`锛屾爤涓婂垱寤洪璋?addHandler 鎶?`std::bad_weak_ptr`锛夛紙搂7.8锛夈€?- **P2-4锛坉ispatcher 涓?loop 鍚岀嚎绋嬶級**锛歚setDispatcher` 琛?**`dispatcher->assertSameThread()`** 鏂█鈥斺€攄ispatcher 鍒涘缓绾跨▼蹇呴』绛変簬 loop 褰掑睘绾跨▼锛堝惁鍒欏紓姝ュ箍鎾蛋 搂8.2 Step 1 鐨?dispatcher 褰掑睘鏂█璇Е鍙戯級锛埪?.11 濂戠害 #3锛夈€?- **P3锛圧ev 10锛?*锛氣憼 搂7.6 濂戠害 #6 涓?搂7.9 `record` 鍙傛暟褰㈠紡缁熶竴锛堟寜鍊?`CtDispatchContext ctx`锛岃皟鐢ㄤ晶浼?const&锛夛紱鈶?搂5.3 琛?`CtHandlerPriority`锛埪?.15 骞跺叆 ct_handler_token.h锛変笌 `CtPendingEventBase`锛堝叕寮€锛岃惤鐐?ct_queue.h锛夎锛涒憿 寮傛 trace typeName 鐢?*鏁板€?payloadTypeKey**锛圡4 鍙ˉ `virtual std::string_view typeName()`鈥斺€?*M4 宸茶惤鍦?*锛岃 搂7.10 濂戠害 #6锛夈€?
+**Rev 11 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-A / P2-A + P3锛?*锛?
+- **P1-A锛坧ushAny sequence 鏉ユ簮浜掓枼锛?*锛歚CtQueue::pushAny` 娉ㄩ噴鏀瑰啓鈥斺€?*sequence 涓嶅彇鑷?variant**锛堝彂閫佹柟 `CtEvent<T>::sequence()` 鍙兘涓?0 鎴栧悓姝ヨ矾寰勫彿锛夛紝鐢辨湰闃熷垪 `m_seqCounter` 鎸?`m_mutex` 鑷 stamp锛堝绾?#9锛夛紱**priority 浠?variant 鍐呬簨浠惰鍙?*锛坄std::visit` 鍙?`CtEvent<T>::priority()`锛夈€?*`pushAny` 鐨?priority 鍙傛暟鍒犻櫎**锛坄CtQueueBase::pushAny(std::unique_ptr<detail::CtAnyEventBase>, std::weak_ptr<CtReceiver>)` + `CtQueue::pushAny` 鍚屾锛夆€斺€旈伩鍏嶅弬鏁颁笌 variant 鍊煎弻鏉冨▉锛埪?.10 绛惧悕涓庡绾?#7锛夈€?- **P2-A锛坕njectEvent 鏃犺皟鐢ㄨ矾寰勶級**锛氬畾**鏂规 A 涓洪閫?*鈥斺€斿唴寤烘簮锛坄CtTimerEventSource`/`ManualEventSource`锛変竴寰?*婧愪晶妯℃澘鍖?*锛堟惡甯?`EventSet` 绫诲瀷鍙傛暟锛宍poll` 鍐呯粡 `queue.eventSetId()` 鏂█鍚?`static_cast<CtQueue<EventSet>&>` 寮虹被鍨?`push`锛夛紱闈炴ā鏉挎簮鍦ㄥ彧鎸?`CtQueueBase&` 褰㈡€佷笅**娌℃湁娉ㄥ叆閫氶亾**锛堟棤娉曡皟 loop 妯℃澘鎴愬憳銆佷篃鏃犳硶鏋勯€?holder锛夈€俙CtEventLoop::injectEvent<EventSet, T>` **闄嶇骇鏍囨敞涓哄簲鐢?妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾**锛堟湁鍚堟硶璋冪敤鑰咃細搴旂敤浠ｇ爜鎴?Qt 妗ョ粡 loop 鎸囬拡璋冪敤锛屽悓鏍峰厛鏂█ eventSetId 鍐嶄笅杞瀷锛夛紙搂7.12 濂戠害 #6锛夈€?- **P3-1锛埪?.11 濂戠害 #2 kDropped 涓夊彞鍒嗗伐锛?*锛氣憼 `kQueued` 鐢?`CtQueue::front()` 璁?*闃熷垪 trace**锛涒憽 婧㈠嚭 `kDropped` 鐢?`CtQueue::popDropped()` 璁?*闃熷垪 trace**锛涒憿 **鐩爣宸蹭骸 `kDropped` 鐢?`dispatchAny` 璁?dispatcher trace**锛坄dispatchAny` 鍙敹 `CtPendingEventBase&`锛屾棤娉曡闂槦鍒?`m_trace`锛夆€斺€斿垹闄?涓€寰嬬粡闃熷垪 trace"鐨勭煕鐩捐〃杩帮紙搂7.11 濂戠害 #2锛夈€?- **P3-2锛堝紓姝?trace typeName 钀界偣锛?*锛歚CtTrace::record(std::string_view typeName, ...)` 淇濇寔瀛楃涓插舰鍙傦紱寮傛鐩镐綅锛坘Queued/kDropped锛夌殑闃熷垪 trace 浼?*鍗犱綅 `"<async>"`**锛孧4 琛?`CtPendingEventBase::typeName()` 鍚庢浛鎹紙搂7.9 record 娉ㄩ噴銆伮?.10 濂戠害 #6锛夈€?- **P3-3锛埪?.2 Step 3 寮傛渚嬪锛?*锛氬箍鎾?pending 缁?`dispatchAny` 鎺掔┖鏃?*缁ф壙 搂8.1 Step 3 寮傛渚嬪**锛堣烦杩?sequence 閲嶈祴鍊笺€佷繚鐣?accepted 澶嶄綅 + kDispatched 璁板叆闃熷簭锛夛紙搂8.2 Step 3锛夈€?- **P3-4锛坈t_queue.h include 娓呯悊锛?*锛氱Щ闄?`ct_handler_token.h`锛坄CtQueue` 鐨?priority 鏄?`uint64_t`锛屼笉鐢?`CtHandlerPriority`锛夆€斺€旈槻鎰忓渚濊禆锛埪?.10 include 娓呭崟锛夈€?
+**Rev 12 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1 / P1-2 / P2-1鈥2-3 + P3锛?*锛?
+- **P1-1锛坰end 绾跨▼濂戠害涓?dispatcher 鍗曠嚎绋嬬煕鐩撅級**锛歚send` Step 1 鏀?*鍙屽綊灞炴柇瑷€** `if (!receiver->assertSameThread() || !this->assertSameThread())`鈥斺€攔eceiver 褰掑睘 **鈭?* dispatcher 褰掑睘锛?*闅愬惈 "receiver 蹇呴』鍒涘缓浜?dispatcher 褰掑睘绾跨▼"**銆偮?0.2 瑙勫垯 #1 涓庡綊灞炶〃鍚屾鏀瑰啓锛坉ispatcher `m_trace` 涓ユ牸鍗曠嚎绋嬶紝搂7.9 濂戠害 #1锛涜法绾跨▼ send 鍐?trace = data race锛夛紙搂8.1 Step 1銆伮?0.2锛夈€?- **P1-2锛堝悓姝?sequence 璁℃暟鍣ㄦ棤钀界偣锛?*锛歚CtDispatcherBase` 鎴愬憳娓呭崟琛?**`uint64_t m_nextSequence = 0;`**锛堝悓姝ヨ矾寰勫崟绾跨▼璁块棶锛屾櫘閫?uint64_t 瀹夊叏锛浡?.1/搂8.2 Step 3 `++` 鍚?`setSequence`锛涘紓姝ヨ蛋闃熷垪 `m_seqCounter`锛屼袱閿┖闂寸嫭绔嬶級锛埪?.8锛夈€?- **P2-1锛坲nbindAll 鏃犲畾浣嶆満鍒讹級**锛氭柟妗?a 瀹氱鈥斺€攔eceiver 琛?**`std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers;`**锛坄bindHandler` 鐧昏銆佹敞閿€/鏋愭瀯绉婚櫎锛沗unbindAll()` 閬嶅巻閫愪釜娉ㄩ攢锛夛紱`ct_receiver.h` 琛?`<vector>` + 鍓嶇疆澹版槑 `CtDispatcherBase`锛?*婢勬竻杩欎笉鏄浜屽 handler 琛?*锛埪?.5 濂戠害 #5 绂佺殑鏄?handler 琛紝涓嶆帓鏂?dispatcher 鎸囬拡鍒楄〃锛夛紙搂7.5銆伮?.1 濂戠害 #4锛夈€?- **P2-2锛坧ayloadPtr const 鐭涚浘锛?*锛歚CtPendingEventBase::payloadPtr()`銆乣detail::CtAnyEventBase::payloadPtr()`銆乣CtAnyEventHolder::payloadPtr()`銆乣CtPendingEvent::payloadPtr()` **鍏ㄩ儴鏀归潪 const `void*`**鈥斺€攄ispatchAny 璧?搂8.1 绠＄嚎澶嶄綅 accepted銆乭andler/filter 鏀堕潪 const `CtEvent<T>&`锛埪?.5/搂7.10锛夈€?- **P2-3锛坕njectEvent 娉ㄩ噴娈嬬暀锛?*锛氭敼鍐欎负"**搴旂敤/妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾**"锛堝簲鐢ㄤ唬鐮佹垨 Qt 妗ョ粡 loop 鎸囬拡璋冪敤锛夛紝鏂█/涓嬭浆鍨嬭涔変繚鐣欙紙搂7.11锛夈€?- **P3-1锛堟ā鏉垮寲婧愮鍚嶏級**锛毬?.12 濂戠害 #4 瀹?`CtTimerEventSource<EventSet>`/`ManualEventSource<EventSet>`锛堟惡甯?EventSet 绫诲瀷鍙傛暟鐨勬ā鏉跨被锛宍poll` 鍐?eventSetId 鏂█ + 涓嬭浆鍨嬪己绫诲瀷 push锛涙娊璞℃帴鍙?`CtEventSource` 淇濇寔闈炴ā鏉匡紝妯℃澘鍖栬惤娲剧敓婧愶級銆?- **P3-2锛圗ventSet 韬唤閿?API锛?*锛毬?.4 濂戠害 #6 娉ㄦ槑鈥斺€擿eventSetId()` 鐨勫疄鐜?= **`CtTypeKey<CtEventSet<Ts...>>::value()`**锛埪?.1 鏂规娉涚敤锛夈€?- **P3-3锛坉ispatchAny 娉ㄩ噴锛?*锛氫慨姝ｄ负 "**Step 2锛圕OW 蹇収锛? Steps 4-8 + Step 3 鐨?accepted 澶嶄綅**锛堜笉鍚?sequence 閲嶈祴鍊硷級"锛埪?.8锛夈€?- **P3-4锛堟帓绌哄紓甯歌矾寰勶級**锛歚dispatchAny` 鎶涘紓甯糕啋`popFront` 鏈墽琛屸啋闃熷ご淇濈暀銆佷笅涓€杞噸澶嶈 `kQueued`锛堝彲鎺ュ彈锛夛紱寮傚父浼犳挱鍒?`exec()` 璋冪敤鏂癸紱**涓嶅緱鍚炲紓甯歌烦杩?popFront**锛埪?.11 濂戠害 #2锛夈€?- **P3-5锛坮ecord objectId 鍐椾綑锛?*锛歚CtTrace::record` 鐨?`objectId` 鍙傛暟娉ㄦ槑鏄?`ctx.receiverId()` 鐨勪究鎹锋嫹璐濓紙鐪熺浉鍦?ctx锛涘疄鐜板彲鐪佺暐璇ュ弬鏁版敼璇?ctx锛夆€斺€旂鍚嶄繚鎸佷负璁ゅ彲褰㈠紡锛埪?.9锛夈€?
+**Rev 13 淇瑕佺偣锛堝搴斿鏌ヨ鍐?P1-1 / P2-A / P2-B + P3锛?*锛?
+- **P1-1锛坧ayloadPtr const 鎴愬憳鍑芥暟鐭涚浘锛?*锛歚payloadPtr()` **5 澶勭鍚嶅幓鎺夋垚鍛樺嚱鏁?`const` 闄愬畾绗?* 鈫?`virtual void* payloadPtr() noexcept = 0;`锛坄CtPendingEventBase` 搂6.5/搂7.10 脳2銆乣detail::CtAnyEventBase`銆乣CtAnyEventHolder` 鍐呰仈浣撱€乣CtPendingEvent` override 鍚屾锛夆€斺€攃onst 鎴愬憳鍑芥暟鍐?`&m_value`锛坄const any_event*`锛夐殣寮忚浆闈?const `void*` 涓㈠純 const 鏄紪璇戦敊璇紙搂6.5/搂7.10锛夈€?- **P2-A锛坲nbindAll 鏃犺惤鍦版満鍒讹級**锛歚CtDispatcherBase` 琛?**`void unregisterReceiver(uint64_t receiverObjectId);`**锛坧rotected锛屾寔 `m_writeMutex` + COW 鍙戝竷锛岀Щ闄ゅ揩鐓т腑鎵€鏈夊尮閰?receiver 鐨?Handler/Filter/Observer 鏉＄洰锛? **`friend class CtReceiver;`**锛浡?.5 `bindHandler` 鍚?`m_dispatchers` 鐧昏銆乣unbindAll` 閬嶅巻閫愪釜璋?`unregisterReceiver(objectId())`锛涢檲鏃у急鎸囬拡 `lock()` 澶辫触鍗宠烦杩囷紙搂7.8銆伮?.5 濂戠害 #5/#6銆伮?.1 濂戠害 #4锛夈€?- **P2-B锛圕tEventSource affinity 鍐欏叆閫氶亾锛?*锛歚CtEventSource` 琛?**protected `void setAffinityThread(CtThreadId)` + `friend class CtEventLoop;`**锛沗attachSource` attach 鎴愬姛鏃惰皟鐢紙搂7.12 绫诲畾涔?+ 濂戠害 #5銆伮?.11锛夈€?- **P3-1锛圫tep 3 鏄惧紡鍖栵級**锛毬?.1/搂8.2 Step 3 鐩存帴鍐?**`event.setSequence(++m_nextSequence)`**锛堜笉鍐嶉潬 搂7.8 娉ㄩ噴鎸囪锛夈€?- **P3-2锛坱oken move 璧嬪€硷級**锛毬?.7 濂戠害 #2 閽夋鈥斺€攎ove 璧嬪€兼椂鐩爣鑻ユ寔鏈?*瀛樻椿娉ㄥ唽**锛?*鍏堟敞閿€鏃ф敞鍐屽啀鎺ョ**锛堢瓑浠锋瀽鏋?+ move-construct锛夈€?- **P3-3锛堟孩鍑轰涪寮冪瓥鐣ワ級**锛氳瀹?*涓㈠純闃熷熬**锛堟渶浣庝紭鍏堢骇銆佸悓绾т腑鏈€鏃э紱浼樺厛绾ф湁搴?deque 涓?鏈€鏃?鏃犵簿纭惤鐐癸紝闃熷熬鏃犻渶鏃堕棿鎴筹級鈥斺€斅?.10 濂戠害 #5銆伮?0.3 瑙勫垯 #3 鍚屾銆?- **P3-4锛坉ispatchAny 鍒嗘敮鏄惧紡锛?*锛毬?.8 `dispatchAny` 娉ㄩ噴鏄庣‘鈥斺€擿pending.isBroadcast()` 鈫?搂8.2 骞挎挱璇箟锛堝叏琛ㄦ姇閫掞紝receiverId=0锛夛紱鍚﹀垯 鈫?搂8.1 瀹氬悜璇箟锛坄pending.target()` 瀹氬悜鏌ユ壘锛夛紱鍒嗘敮鍦?dispatchAny 鍐呴儴瑙ｆ瀽锛堜笉鍦ㄦ帓绌哄惊鐜級銆?
 ---
 
-## 1. 文档定位与阅读指南
+## 1. 鏂囨。瀹氫綅涓庨槄璇绘寚鍗?
+### 1.1 瀹氫綅
 
-### 1.1 定位
+鏈枃妗ｆ槸 CRISP 浜嬩欢绯荤粺閲嶈璁＄殑**鏉冨▉鏋舵瀯涓庢帴鍙ｈ鑼?*锛屽彇浠?`src/event/` 涓复鏃舵嫾鍑戠殑鍘熷瀷锛屼綔涓哄疄鐜扮殑鍞竴鍙傝€冦€傜紪鐮佸瓙agent 蹇呴』鑳?*鏃犳涔夊湴**瀹炵幇鏁翠釜瀛愮郴缁熲€斺€旀瘡涓叕寮€绫汇€佹柟娉曠鍚嶃€佽涔夊绾︺€佹墍鏈夋潈瑙勫垯銆佺嚎绋嬪畨鍏ㄥ绾﹂兘鍦ㄤ笅鏂囨槑纭粰鍑恒€?
+### 1.2 涓庡叾浠栨枃妗ｇ殑鍏崇郴
 
-本文档是 CRISP 事件系统重设计的**权威架构与接口规范**，取代 `src/event/` 中临时拼凑的原型，作为实现的唯一参考。编码子agent 必须能**无歧义地**实现整个子系统——每个公开类、方法签名、语义契约、所有权规则、线程安全契约都在下文明确给出。
-
-### 1.2 与其他文档的关系
-
-| 文档 | 角色 |
+| 鏂囨。 | 瑙掕壊 |
 |------|------|
-| `01-qt-event-system-architecture.md` | Qt 怎么做（分析输入） |
-| `02-qt-event-system-pain-points.md` | Qt 设计为什么痛（分析输入） |
-| `03-rewrite-proposal.md` | 战略方向；本文档**实现并细化**它 |
-| 本文档（`04`） | 可落地的具体设计；与 `03` 的偏差在 §10.4 显式说明 |
+| `01-qt-event-system-architecture.md` | Qt 鎬庝箞鍋氾紙鍒嗘瀽杈撳叆锛?|
+| `02-qt-event-system-pain-points.md` | Qt 璁捐涓轰粈涔堢棝锛堝垎鏋愯緭鍏ワ級 |
+| `03-rewrite-proposal.md` | 鎴樼暐鏂瑰悜锛涙湰鏂囨。**瀹炵幇骞剁粏鍖?*瀹?|
+| 鏈枃妗ｏ紙`04`锛?| 鍙惤鍦扮殑鍏蜂綋璁捐锛涗笌 `03` 鐨勫亸宸湪 搂10.4 鏄惧紡璇存槑 |
 
-### 1.3 阅读方式
+### 1.3 闃呰鏂瑰紡
 
-- §2–§3：原则→设计映射 + 现有原型评估（为什么重设计）。
-- §4–§5：总览（分层、命名空间、文件布局）。
-- §6–§11：规范设计（机制、接口、管线、所有权、线程、性能）。
-- §12–§13：实现与测试的逐文件改动指引。
-- §14：阻塞放行的开放问题清单。
+- 搂2鈥撀?锛氬師鍒欌啋璁捐鏄犲皠 + 鐜版湁鍘熷瀷璇勪及锛堜负浠€涔堥噸璁捐锛夈€?- 搂4鈥撀?锛氭€昏锛堝垎灞傘€佸懡鍚嶇┖闂淬€佹枃浠跺竷灞€锛夈€?- 搂6鈥撀?1锛氳鑼冭璁★紙鏈哄埗銆佹帴鍙ｃ€佺绾裤€佹墍鏈夋潈銆佺嚎绋嬨€佹€ц兘锛夈€?- 搂12鈥撀?3锛氬疄鐜颁笌娴嬭瘯鐨勯€愭枃浠舵敼鍔ㄦ寚寮曘€?- 搂14锛氶樆濉炴斁琛岀殑寮€鏀鹃棶棰樻竻鍗曘€?
+### 1.4 鍏ㄧ▼閬靛畧鐨勫伐鍏烽摼绾︽潫
 
-### 1.4 全程遵守的工具链约束
-
-- 仅 C++17（`__cplusplus == 201703L`）：无 concepts、无 `<=>` 默认比较、无协程。
-- 禁用 `std::filesystem`（MinGW 8.1 libstdc++ bug）。
-- 无 moc / qmake / 代码生成；CMake ≥ 3.20。
-- 无裸 `new`/`delete`；无 C 风格 cast；RAII 遍布；函数 ≤ 60 行；公开 API 用 Doxygen 英文注释。
-
+- 浠?C++17锛坄__cplusplus == 201703L`锛夛細鏃?concepts銆佹棤 `<=>` 榛樿姣旇緝銆佹棤鍗忕▼銆?- 绂佺敤 `std::filesystem`锛圡inGW 8.1 libstdc++ bug锛夈€?- 鏃?moc / qmake / 浠ｇ爜鐢熸垚锛汣Make 鈮?3.20銆?- 鏃犺８ `new`/`delete`锛涙棤 C 椋庢牸 cast锛汻AII 閬嶅竷锛涘嚱鏁?鈮?60 琛岋紱鍏紑 API 鐢?Doxygen 鑻辨枃娉ㄩ噴銆?
 ---
 
-## 2. 设计原则映射
+## 2. 璁捐鍘熷垯鏄犲皠
 
-六条项目原则逐一映射到强制执行它的具体类/接口。若某原则仅"文档声明"而未由类型系统或契约强制，则标注。
-
-| # | 原则 | 强制载体 | 机制 |
+鍏潯椤圭洰鍘熷垯閫愪竴鏄犲皠鍒板己鍒舵墽琛屽畠鐨勫叿浣撶被/鎺ュ彛銆傝嫢鏌愬師鍒欎粎"鏂囨。澹版槑"鑰屾湭鐢辩被鍨嬬郴缁熸垨濂戠害寮哄埗锛屽垯鏍囨敞銆?
+| # | 鍘熷垯 | 寮哄埗杞戒綋 | 鏈哄埗 |
 |---|------|----------|------|
-| 1 | **类型安全第一** | `CtEvent<T>`、`CtTypeKey<T>`、`CtEventSet<Ts...>` + `CtAnyEvent`（`std::variant`） | 事件类型即 C++ 类型 `T`；无 int 枚举、无分发时 `static_cast`。载荷类型必须声明（特化 traits），否则编译失败。异构存储是编译期闭合的 `std::variant`；`std::visit` 穷尽。跨 TU 唯一类型键为地址派生（零碰撞，见 §6.4）。 |
-| 2 | **可观测性内置** | `CtTrace`、`CtObserver`、`CtDispatchContext`、`CtTracePhase` | 每次分发步骤由每线程无锁、零分配的环形缓冲区（`CtTrace`）记录，默认开启。观察者是纯只读、可多挂载的回调，绝不改变分发结果。上下文携带相位、接收者 id、过滤器序号、耗时。 |
-| 3 | **所有权明确（RAII/智能指针）** | `CtReceiver`（`enable_shared_from_this`）、`weak_ptr` 注册、`CtHandlerToken`、`CtQueue` | 接收者由 `shared_ptr` 持有；分发器与队列只存 `weak_ptr<CtReceiver>`，销毁的接收者被跳过/丢弃——无悬垂指针、析构无需手动注销遍历。注册是 RAII 的 `CtHandlerToken` 句柄（析构自动注销）。事件为值语义。 |
-| 4 | **线程规则显式** | `CtThreadAffinity`、`CtDispatcher::send/post/postTo`、`CtEventLoop`、`CtQueue` | 投递 API 按线程语义拆分：`send`（同线程、断言）、`post`（投到接收者归属线程）、`postTo`（显式目标线程）。跨线程投递是**不同命名的操作**，绝非运行时碰运气。`CtEventLoop` 每线程一个，持有自己的队列并向分发器注册。 |
-| 5 | **热路径零堆分配** | `CtEvent<T>` 值语义、`CtAnyEvent` variant 存储、`CtTypeKey::value()` 记忆化、COW 分发表、无锁 `CtTrace` | 分发零分配：事件在栈上、类型键为预计算静态量、分发表经原子 COW 快照只读访问、trace 写入固定环形缓冲。`std::function` 只出现在注册 API 边界（绝不在分发热路径构造）。 |
-| 6 | **无代码生成** | 整个子系统 | 纯标准 C++17 + CMake。`CRISP_EVENT_TYPE` 宏只是 traits 特化的预处理器展开（非代码生成）；无 moc、无 qmake、无反射。 |
+| 1 | **绫诲瀷瀹夊叏绗竴** | `CtEvent<T>`銆乣CtTypeKey<T>`銆乣CtEventSet<Ts...>` + `CtAnyEvent`锛坄std::variant`锛?| 浜嬩欢绫诲瀷鍗?C++ 绫诲瀷 `T`锛涙棤 int 鏋氫妇銆佹棤鍒嗗彂鏃?`static_cast`銆傝浇鑽风被鍨嬪繀椤诲０鏄庯紙鐗瑰寲 traits锛夛紝鍚﹀垯缂栬瘧澶辫触銆傚紓鏋勫瓨鍌ㄦ槸缂栬瘧鏈熼棴鍚堢殑 `std::variant`锛沗std::visit` 绌峰敖銆傝法 TU 鍞竴绫诲瀷閿负鍦板潃娲剧敓锛堥浂纰版挒锛岃 搂6.4锛夈€?|
+| 2 | **鍙娴嬫€у唴缃?* | `CtTrace`銆乣CtObserver`銆乣CtDispatchContext`銆乣CtTracePhase` | 姣忔鍒嗗彂姝ラ鐢辨瘡绾跨▼鏃犻攣銆侀浂鍒嗛厤鐨勭幆褰㈢紦鍐插尯锛坄CtTrace`锛夎褰曪紝榛樿寮€鍚€傝瀵熻€呮槸绾彧璇汇€佸彲澶氭寕杞界殑鍥炶皟锛岀粷涓嶆敼鍙樺垎鍙戠粨鏋溿€備笂涓嬫枃鎼哄甫鐩镐綅銆佹帴鏀惰€?id銆佽繃婊ゅ櫒搴忓彿銆佽€楁椂銆?|
+| 3 | **鎵€鏈夋潈鏄庣‘锛圧AII/鏅鸿兘鎸囬拡锛?* | `CtReceiver`锛坄enable_shared_from_this`锛夈€乣weak_ptr` 娉ㄥ唽銆乣CtHandlerToken`銆乣CtQueue` | 鎺ユ敹鑰呯敱 `shared_ptr` 鎸佹湁锛涘垎鍙戝櫒涓庨槦鍒楀彧瀛?`weak_ptr<CtReceiver>`锛岄攢姣佺殑鎺ユ敹鑰呰璺宠繃/涓㈠純鈥斺€旀棤鎮瀭鎸囬拡銆佹瀽鏋勬棤闇€鎵嬪姩娉ㄩ攢閬嶅巻銆傛敞鍐屾槸 RAII 鐨?`CtHandlerToken` 鍙ユ焺锛堟瀽鏋勮嚜鍔ㄦ敞閿€锛夈€備簨浠朵负鍊艰涔夈€?|
+| 4 | **绾跨▼瑙勫垯鏄惧紡** | `CtThreadAffinity`銆乣CtDispatcher::send/post/postTo`銆乣CtEventLoop`銆乣CtQueue` | 鎶曢€?API 鎸夌嚎绋嬭涔夋媶鍒嗭細`send`锛堝悓绾跨▼銆佹柇瑷€锛夈€乣post`锛堟姇鍒版帴鏀惰€呭綊灞炵嚎绋嬶級銆乣postTo`锛堟樉寮忕洰鏍囩嚎绋嬶級銆傝法绾跨▼鎶曢€掓槸**涓嶅悓鍛藉悕鐨勬搷浣?*锛岀粷闈炶繍琛屾椂纰拌繍姘斻€俙CtEventLoop` 姣忕嚎绋嬩竴涓紝鎸佹湁鑷繁鐨勯槦鍒楀苟鍚戝垎鍙戝櫒娉ㄥ唽銆?|
+| 5 | **鐑矾寰勯浂鍫嗗垎閰?* | `CtEvent<T>` 鍊艰涔夈€乣CtAnyEvent` variant 瀛樺偍銆乣CtTypeKey::value()` 璁板繂鍖栥€丆OW 鍒嗗彂琛ㄣ€佹棤閿?`CtTrace` | 鍒嗗彂闆跺垎閰嶏細浜嬩欢鍦ㄦ爤涓娿€佺被鍨嬮敭涓洪璁＄畻闈欐€侀噺銆佸垎鍙戣〃缁忓師瀛?COW 蹇収鍙璁块棶銆乼race 鍐欏叆鍥哄畾鐜舰缂撳啿銆俙std::function` 鍙嚭鐜板湪娉ㄥ唽 API 杈圭晫锛堢粷涓嶅湪鍒嗗彂鐑矾寰勬瀯閫狅級銆?|
+| 6 | **鏃犱唬鐮佺敓鎴?* | 鏁翠釜瀛愮郴缁?| 绾爣鍑?C++17 + CMake銆俙CRISP_EVENT_TYPE` 瀹忓彧鏄?traits 鐗瑰寲鐨勯澶勭悊鍣ㄥ睍寮€锛堥潪浠ｇ爜鐢熸垚锛夛紱鏃?moc銆佹棤 qmake銆佹棤鍙嶅皠銆?|
 
 ---
 
-## 3. 现有原型（v0）评估
-
-评估文件：`src/event/ct_event.h`、`ct_dispatcher.h`、`ct_trace.h`；测试 `tests/event/`。
-
-| 方面 | v0 现状 | 裁决 | 设计修复（章节） |
+## 3. 鐜版湁鍘熷瀷锛坴0锛夎瘎浼?
+璇勪及鏂囦欢锛歚src/event/ct_event.h`銆乣ct_dispatcher.h`銆乣ct_trace.h`锛涙祴璇?`tests/event/`銆?
+| 鏂归潰 | v0 鐜扮姸 | 瑁佸喅 | 璁捐淇锛堢珷鑺傦級 |
 |------|---------|------|------------------|
-| 事件类型标识 | `CtEventTraits<T>::name` 默认 `"CtEvent"`；`typeKey<T>()` = 对该字符串做 FNV-1a | **偏离** — 所有未特化载荷类型映射到同一个键 → 跨 TU 碰撞、分发到错误 handler、静默类型混淆。FNV-1a 仅 64 位概率性。 | 地址派生编译期唯一键 + 强制 traits 特化（`static_assert`）（§6.4）。 |
-| 类型安全 | `CtEvent<T>` + 擦除 lambda 调用时 `const void*` 再 cast | **部分** — 类型化 API 表面安全，但擦除存储依赖"只从 `dispatch<T>` 调用"的纪律；键碰撞（见上）会静默破坏不变量。 | 无碰撞键；异步路径用基于 variant 的闭合集取代再 cast；分发时 debug 断言键匹配（§6、§10）。 |
-| 可观测性 | `CtTrace` 环 + `CtTracePhase`（4 相位）、`CtObserver` | **部分** — 存在且默认开启，但 `record()` 每次分发步骤取 `std::mutex`（争用、零分配但加锁），相位缺失异步路径（入队/丢弃）与观察者拆分。 | 每线程无锁序列号环；扩展相位（§7.7–7.8、§11.4）。 |
-| 接收者生命周期 | `addHandler(CtReceiver* receiver, ...)` 存裸指针；"按约定"接收者比 handler 长寿 | **偏离** — 接收者析构后悬垂指针；无自动注销；广播与定向查找都用裸指针。 | `shared_ptr` 持有接收者、`weak_ptr` 注册、`CtHandlerToken`（§7.1–7.3、§9）。 |
-| 线程 | 无异步路径；`dispatch()` 仅注释"非线程安全" | **偏离** — 无 `post`/队列/循环；无归属；跨线程叙事缺失。 | `send`/`post`/`postTo` 拆分、`CtQueue`、`CtEventLoop`、`CtThreadAffinity`（§10）。 |
-| 热路径分配 | 值语义事件（好）；每注册存 `std::function`；每次分发 `unordered_map` 查找；trace 加锁 | **部分** — 事件本身零分配，但类型键哈希每类型一次（可接受），trace 锁与 map 查找是每次分发成本；`std::function` 分配仅发生在注册时。 | COW 表快照（无锁读）、记忆化键、无锁 trace（§11）。 |
-| 命名（`Ct` 前缀、`lowerCamelCase`） | v0 符合 | **符合** | 保留。 |
-| 命名冲突 | `enum class CtEventSource { kSystem, kApplication }` 与 `03` 方案的 `EventSource` 概念冲突 | **偏离** — 同一命名空间同一名字两种含义 | 枚举改名 `CtEventOrigin`；`CtEventSource` 成为抽象平台源接口（§5.3、§12）。 |
-| 无 moc / CMake / 纯 C++ | 符合 | **符合** | 保留。 |
-| 测试 | 手写 harness，无 mock 框架 | **符合** — 但测试断言了易碰撞行为（`CtEventTraits` 特化在测试中可选） | 扩展：跨 TU 键唯一性、token 生命周期、weak_ptr 自动跳过、归属违规、队列排序（§13）。 |
+| 浜嬩欢绫诲瀷鏍囪瘑 | `CtEventTraits<T>::name` 榛樿 `"CtEvent"`锛沗typeKey<T>()` = 瀵硅瀛楃涓插仛 FNV-1a | **鍋忕** 鈥?鎵€鏈夋湭鐗瑰寲杞借嵎绫诲瀷鏄犲皠鍒板悓涓€涓敭 鈫?璺?TU 纰版挒銆佸垎鍙戝埌閿欒 handler銆侀潤榛樼被鍨嬫贩娣嗐€侳NV-1a 浠?64 浣嶆鐜囨€с€?| 鍦板潃娲剧敓缂栬瘧鏈熷敮涓€閿?+ 寮哄埗 traits 鐗瑰寲锛坄static_assert`锛夛紙搂6.4锛夈€?|
+| 绫诲瀷瀹夊叏 | `CtEvent<T>` + 鎿﹂櫎 lambda 璋冪敤鏃?`const void*` 鍐?cast | **閮ㄥ垎** 鈥?绫诲瀷鍖?API 琛ㄩ潰瀹夊叏锛屼絾鎿﹂櫎瀛樺偍渚濊禆"鍙粠 `dispatch<T>` 璋冪敤"鐨勭邯寰嬶紱閿鎾烇紙瑙佷笂锛変細闈欓粯鐮村潖涓嶅彉閲忋€?| 鏃犵鎾為敭锛涘紓姝ヨ矾寰勭敤鍩轰簬 variant 鐨勯棴鍚堥泦鍙栦唬鍐?cast锛涘垎鍙戞椂 debug 鏂█閿尮閰嶏紙搂6銆伮?0锛夈€?|
+| 鍙娴嬫€?| `CtTrace` 鐜?+ `CtTracePhase`锛? 鐩镐綅锛夈€乣CtObserver` | **閮ㄥ垎** 鈥?瀛樺湪涓旈粯璁ゅ紑鍚紝浣?`record()` 姣忔鍒嗗彂姝ラ鍙?`std::mutex`锛堜簤鐢ㄣ€侀浂鍒嗛厤浣嗗姞閿侊級锛岀浉浣嶇己澶卞紓姝ヨ矾寰勶紙鍏ラ槦/涓㈠純锛変笌瑙傚療鑰呮媶鍒嗐€?| 姣忕嚎绋嬫棤閿佸簭鍒楀彿鐜紱鎵╁睍鐩镐綅锛埪?.7鈥?.8銆伮?1.4锛夈€?|
+| 鎺ユ敹鑰呯敓鍛藉懆鏈?| `addHandler(CtReceiver* receiver, ...)` 瀛樿８鎸囬拡锛?鎸夌害瀹?鎺ユ敹鑰呮瘮 handler 闀垮 | **鍋忕** 鈥?鎺ユ敹鑰呮瀽鏋勫悗鎮瀭鎸囬拡锛涙棤鑷姩娉ㄩ攢锛涘箍鎾笌瀹氬悜鏌ユ壘閮界敤瑁告寚閽堛€?| `shared_ptr` 鎸佹湁鎺ユ敹鑰呫€乣weak_ptr` 娉ㄥ唽銆乣CtHandlerToken`锛埪?.1鈥?.3銆伮?锛夈€?|
+| 绾跨▼ | 鏃犲紓姝ヨ矾寰勶紱`dispatch()` 浠呮敞閲?闈炵嚎绋嬪畨鍏? | **鍋忕** 鈥?鏃?`post`/闃熷垪/寰幆锛涙棤褰掑睘锛涜法绾跨▼鍙欎簨缂哄け銆?| `send`/`post`/`postTo` 鎷嗗垎銆乣CtQueue`銆乣CtEventLoop`銆乣CtThreadAffinity`锛埪?0锛夈€?|
+| 鐑矾寰勫垎閰?| 鍊艰涔変簨浠讹紙濂斤級锛涙瘡娉ㄥ唽瀛?`std::function`锛涙瘡娆″垎鍙?`unordered_map` 鏌ユ壘锛泃race 鍔犻攣 | **閮ㄥ垎** 鈥?浜嬩欢鏈韩闆跺垎閰嶏紝浣嗙被鍨嬮敭鍝堝笇姣忕被鍨嬩竴娆★紙鍙帴鍙楋級锛宼race 閿佷笌 map 鏌ユ壘鏄瘡娆″垎鍙戞垚鏈紱`std::function` 鍒嗛厤浠呭彂鐢熷湪娉ㄥ唽鏃躲€?| COW 琛ㄥ揩鐓э紙鏃犻攣璇伙級銆佽蹇嗗寲閿€佹棤閿?trace锛埪?1锛夈€?|
+| 鍛藉悕锛坄Ct` 鍓嶇紑銆乣lowerCamelCase`锛?| v0 绗﹀悎 | **绗﹀悎** | 淇濈暀銆?|
+| 鍛藉悕鍐茬獊 | `enum class CtEventSource { kSystem, kApplication }` 涓?`03` 鏂规鐨?`EventSource` 姒傚康鍐茬獊 | **鍋忕** 鈥?鍚屼竴鍛藉悕绌洪棿鍚屼竴鍚嶅瓧涓ょ鍚箟 | 鏋氫妇鏀瑰悕 `CtEventOrigin`锛沗CtEventSource` 鎴愪负鎶借薄骞冲彴婧愭帴鍙ｏ紙搂5.3銆伮?2锛夈€?|
+| 鏃?moc / CMake / 绾?C++ | 绗﹀悎 | **绗﹀悎** | 淇濈暀銆?|
+| 娴嬭瘯 | 鎵嬪啓 harness锛屾棤 mock 妗嗘灦 | **绗﹀悎** 鈥?浣嗘祴璇曟柇瑷€浜嗘槗纰版挒琛屼负锛坄CtEventTraits` 鐗瑰寲鍦ㄦ祴璇曚腑鍙€夛級 | 鎵╁睍锛氳法 TU 閿敮涓€鎬с€乼oken 鐢熷懡鍛ㄦ湡銆亀eak_ptr 鑷姩璺宠繃銆佸綊灞炶繚瑙勩€侀槦鍒楁帓搴忥紙搂13锛夈€?|
 
-**结论**：v0 的骨架（类型化 `CtEvent<T>`、带观察者/过滤器/handler 的分发管线、内置 trace）方向正确，但四个缺陷使其不能作为地基：(1) 类型键碰撞、(2) 悬垂接收者指针、(3) 无异步/线程模型、(4) 加锁 trace。重设计保留骨架并修复缺陷。
-
+**缁撹**锛歷0 鐨勯鏋讹紙绫诲瀷鍖?`CtEvent<T>`銆佸甫瑙傚療鑰?杩囨护鍣?handler 鐨勫垎鍙戠绾裤€佸唴缃?trace锛夋柟鍚戞纭紝浣嗗洓涓己闄蜂娇鍏朵笉鑳戒綔涓哄湴鍩猴細(1) 绫诲瀷閿鎾炪€?2) 鎮瀭鎺ユ敹鑰呮寚閽堛€?3) 鏃犲紓姝?绾跨▼妯″瀷銆?4) 鍔犻攣 trace銆傞噸璁捐淇濈暀楠ㄦ灦骞朵慨澶嶇己闄枫€?
 ---
 
-## 4. 架构总览
+## 4. 鏋舵瀯鎬昏
 
-### 4.1 分层图
-
+### 4.1 鍒嗗眰鍥?
 ```mermaid
 flowchart TB
-    subgraph Application["应用层"]
-        UI["UI / 业务对象（CtReceiver 子类）"]
-        SET["CtEventSet&lt;PayloadA, PayloadB, ...&gt;（闭合事件集）"]
+    subgraph Application["搴旂敤灞?]
+        UI["UI / 涓氬姟瀵硅薄锛圕tReceiver 瀛愮被锛?]
+        SET["CtEventSet&lt;PayloadA, PayloadB, ...&gt;锛堥棴鍚堜簨浠堕泦锛?]
         HANDLER["CtHandler&lt;T&gt; lambdas / CtReceiver::bindHandler"]
     end
 
-    subgraph Core["事件核心：crisp::event"]
+    subgraph Core["浜嬩欢鏍稿績锛歝risp::event"]
         EV["CtEvent&lt;T&gt; / CtEventTraits / CtTypeKey"]
-        ANY["CtAnyEvent（std::variant）+ std::visit"]
+        ANY["CtAnyEvent锛坰td::variant锛? std::visit"]
         DSP["CtDispatcher&lt;EventSet&gt;"]
         RCVR["CtReceiver / CtHandlerToken / CtDispatchContext"]
         FLT["CtFilter&lt;T&gt;"]
         OBS["CtObserver&lt;T&gt;"]
-        TRC["CtTrace（无锁环）"]
+        TRC["CtTrace锛堟棤閿佺幆锛?]
         AFF["CtThreadAffinity"]
-        Q["CtQueue&lt;EventSet&gt;（每线程）"]
+        Q["CtQueue&lt;EventSet&gt;锛堟瘡绾跨▼锛?]
         LOOP["CtEventLoop&lt;EventSet&gt;"]
-        SRC["CtEventSource（抽象）"]
+        SRC["CtEventSource锛堟娊璞★級"]
     end
 
-    subgraph Platform["平台层"]
-        TIMER["CtTimerEventSource（std::chrono）"]
-        WIN["Win32EventSource（延后）"]
-        MANUAL["ManualEventSource（测试用）"]
+    subgraph Platform["骞冲彴灞?]
+        TIMER["CtTimerEventSource锛坰td::chrono锛?]
+        WIN["Win32EventSource锛堝欢鍚庯級"]
+        MANUAL["ManualEventSource锛堟祴璇曠敤锛?]
     end
 
     UI --> HANDLER
@@ -299,46 +154,34 @@ flowchart TB
     AFF --> RCVR
 ```
 
-分层规则：
+鍒嗗眰瑙勫垯锛?
+1. **搴旂敤灞?*鍙兘渚濊禆**鏍稿績灞?*锛涙牳蹇冨眰缁濅笉渚濊禆搴旂敤灞傛垨骞冲彴灞傘€?2. **鏍稿績灞?*鏄函 C++17銆佸ご浼樺厛銆佸彲鐙珛缂栬瘧娴嬭瘯锛?閫愭鏇夸唬 Qt"鐨勫墠缃潯浠讹級銆?3. **骞冲彴灞?*婧愬疄鐜?`CtEventSource`锛屾妸浜嬩欢娉ㄥ叆 `CtQueue`锛涚粷涓嶇洿鎺ユ帴瑙︽帴鏀惰€呮垨鍒嗗彂鍣ㄣ€?4. `CtEventLoop` 鏄繛鎺ラ槦鍒椻啋鍒嗗彂鍣ㄧ殑鍞竴鍦烘墍锛沗CtDispatcher` 鏄繛鎺ユ簮杈撳嚭锛堢粡闃熷垪鎺掔┖锛夊埌绫诲瀷鍖栨姇閫掔殑鍞竴鍦烘墍銆?
+### 4.2 婕旇繘璺嚎
 
-1. **应用层**只能依赖**核心层**；核心层绝不依赖应用层或平台层。
-2. **核心层**是纯 C++17、头优先、可独立编译测试（"逐步替代 Qt"的前置条件）。
-3. **平台层**源实现 `CtEventSource`，把事件注入 `CtQueue`；绝不直接接触接收者或分发器。
-4. `CtEventLoop` 是连接队列→分发器的唯一场所；`CtDispatcher` 是连接源输出（经队列排空）到类型化投递的唯一场所。
-
-### 4.2 演进路线
-
-| 里程碑 | 内容 | 退出标准 |
+| 閲岀▼纰?| 鍐呭 | 閫€鍑烘爣鍑?|
 |--------|------|----------|
-| **M0（本文档）** | 完整架构 + 接口规范定稿 | 本文档到达 `READY_FOR_REVIEW` 并获批准 |
-| **M1** | 同步核心：`CtEvent`、`CtTypeKey`、`CtEventTraits`（强制）、`CtReceiver`（shared_ptr）、`CtHandlerToken`、COW `CtDispatcher` 全管线、无锁 `CtTrace` | 所有 M1 测试绿；同步路径相对 v0 无回归 |
-| **M2** | 异步核心：`CtEventSet`、`CtAnyEvent`、`CtQueue`、`CtEventLoop`、`CtThreadAffinity`、`send/post/postTo`、`CtTimerEventSource`、`ManualEventSource` | 队列排序、归属断言、定时器测试绿；分配计数器显示分发零分配 |
-| **M3** | Qt 桥（可选）：`QtEventBridge` 适配器、双跑验证（同一业务代码同一行为） | 桥测试通过；`docs/event-system/05` 记录桥 |
-| **M4** | 加固：槽对象池（§11.3）、flat-map 表、`CtOpaqueEvent` 逃生舱（§6.5）、跨 DLL 键稳定性 | 性能剖析驱动；不承诺排期 |
+| **M0锛堟湰鏂囨。锛?* | 瀹屾暣鏋舵瀯 + 鎺ュ彛瑙勮寖瀹氱 | 鏈枃妗ｅ埌杈?`READY_FOR_REVIEW` 骞惰幏鎵瑰噯 |
+| **M1** | 鍚屾鏍稿績锛歚CtEvent`銆乣CtTypeKey`銆乣CtEventTraits`锛堝己鍒讹級銆乣CtReceiver`锛坰hared_ptr锛夈€乣CtHandlerToken`銆丆OW `CtDispatcher` 鍏ㄧ绾裤€佹棤閿?`CtTrace` | 鎵€鏈?M1 娴嬭瘯缁匡紱鍚屾璺緞鐩稿 v0 鏃犲洖褰?|
+| **M2** | 寮傛鏍稿績锛歚CtEventSet`銆乣CtAnyEvent`銆乣CtQueue`銆乣CtEventLoop`銆乣CtThreadAffinity`銆乣send/post/postTo`銆乣CtTimerEventSource`銆乣ManualEventSource` | 闃熷垪鎺掑簭銆佸綊灞炴柇瑷€銆佸畾鏃跺櫒娴嬭瘯缁匡紱鍒嗛厤璁℃暟鍣ㄦ樉绀哄垎鍙戦浂鍒嗛厤 |
+| **M3** | Qt 妗ワ紙鍙€夛級锛歚QtEventBridge` 閫傞厤鍣ㄣ€佸弻璺戦獙璇侊紙鍚屼竴涓氬姟浠ｇ爜鍚屼竴琛屼负锛?| 妗ユ祴璇曢€氳繃锛沗docs/event-system/05` 璁板綍妗?|
+| **M4** | 鍔犲浐锛氭Ы瀵硅薄姹狅紙搂11.3锛夈€乫lat-map 琛ㄣ€乣CtOpaqueEvent` 閫冪敓鑸憋紙搂6.5锛夈€佽法 DLL 閿ǔ瀹氭€?| 鎬ц兘鍓栨瀽椹卞姩锛涗笉鎵胯鎺掓湡 |
 
-M1 与 M2 是本文档隐含的实现范围。M3/M4 项在 §14 标记为可推迟。
-
+M1 涓?M2 鏄湰鏂囨。闅愬惈鐨勫疄鐜拌寖鍥淬€侻3/M4 椤瑰湪 搂14 鏍囪涓哄彲鎺ㄨ繜銆?
 ---
 
-## 5. 命名空间与文件布局
+## 5. 鍛藉悕绌洪棿涓庢枃浠跺竷灞€
 
-### 5.1 命名空间
+### 5.1 鍛藉悕绌洪棿
 
-- `crisp` — 项目顶层命名空间。
-- `crisp::event` — 整个事件子系统（公开）。
-- `crisp::event::detail` — 内部辅助（类型锚点、擦除存储）；**非**公开 API，随时可改。
-
-### 5.2 命名规则（来自 `AGENTS.md` / `style-guide.md`）
-
-- 所有公开类/结构体前缀 `Ct`；枚举前缀 `Ct`；枚举值 `k` 前缀；成员变量 `m_`；静态成员 `s_`；自由函数与方法 `lowerCamelCase()`。
-- 模板参数、局部变量、函数参数无需前缀。
-- `CtXxx<T>` 形式的类型别名保留 `Ct` 前缀便于检索。全部完整定义如下（**审查补全 P2-9**）：
+- `crisp` 鈥?椤圭洰椤跺眰鍛藉悕绌洪棿銆?- `crisp::event` 鈥?鏁翠釜浜嬩欢瀛愮郴缁燂紙鍏紑锛夈€?- `crisp::event::detail` 鈥?鍐呴儴杈呭姪锛堢被鍨嬮敋鐐广€佹摝闄ゅ瓨鍌級锛?*闈?*鍏紑 API锛岄殢鏃跺彲鏀广€?
+### 5.2 鍛藉悕瑙勫垯锛堟潵鑷?`AGENTS.md` / `style-guide.md`锛?
+- 鎵€鏈夊叕寮€绫?缁撴瀯浣撳墠缂€ `Ct`锛涙灇涓惧墠缂€ `Ct`锛涙灇涓惧€?`k` 鍓嶇紑锛涙垚鍛樺彉閲?`m_`锛涢潤鎬佹垚鍛?`s_`锛涜嚜鐢卞嚱鏁颁笌鏂规硶 `lowerCamelCase()`銆?- 妯℃澘鍙傛暟銆佸眬閮ㄥ彉閲忋€佸嚱鏁板弬鏁版棤闇€鍓嶇紑銆?- `CtXxx<T>` 褰㈠紡鐨勭被鍨嬪埆鍚嶄繚鐣?`Ct` 鍓嶇紑渚夸簬妫€绱€傚叏閮ㄥ畬鏁村畾涔夊涓嬶紙**瀹℃煡琛ュ叏 P2-9**锛夛細
 
 ```cpp
-// 三个回调类型的规范定义（位于 ct_receiver.h / ct_dispatcher.h，公共别名）
+// 涓変釜鍥炶皟绫诲瀷鐨勮鑼冨畾涔夛紙浣嶄簬 ct_receiver.h / ct_dispatcher.h锛屽叕鍏卞埆鍚嶏級
 
 /// Handler: the delivery callback for CtEvent<T> to one receiver.
-/// Non-const event reference so the handler may accept()/ignore() (§7.3).
+/// Non-const event reference so the handler may accept()/ignore() (搂7.3).
 template <typename T>
 using CtHandler = std::function<void(CtEvent<T>&)>;
 
@@ -347,60 +190,42 @@ template <typename T>
 using CtFilter = std::function<bool(CtEvent<T>&)>;
 
 /// Observer: pure, read-only callback for one dispatch step.
-/// Const event reference — observation MUST NOT affect the outcome (§8.3).
+/// Const event reference 鈥?observation MUST NOT affect the outcome (搂8.3).
 template <typename T>
 using CtObserver = std::function<void(const CtEvent<T>&, const CtDispatchContext&)>;
 ```
 
-> **实现注意**：`CtObserver<T>` 的**回调签名**携带两个参数 `(const CtEvent<T>&, const CtDispatchContext&)`，是 **v0 形态的直接升级**（v0 为 `(const CtEvent<T>&, CtTracePhase)`，§7.6 契约）；但 `CtObserver<T>` 本身是**单模板参数别名**（§5.2 定义），`addObserver` 的签名一律写作 `addObserver(CtObserver<T>, ...)`（**不是** `CtObserver<T, CtDispatchContext>`——Rev 3 N2 已修复）。三个别名均为 `std::function`（SBO 友好），只允许在**注册 API 边界**构造，绝不在分发热路径构造（§11.1）。
-
-### 5.3 `src/event/` 下的公开文件布局
+> **瀹炵幇娉ㄦ剰**锛歚CtObserver<T>` 鐨?*鍥炶皟绛惧悕**鎼哄甫涓や釜鍙傛暟 `(const CtEvent<T>&, const CtDispatchContext&)`锛屾槸 **v0 褰㈡€佺殑鐩存帴鍗囩骇**锛坴0 涓?`(const CtEvent<T>&, CtTracePhase)`锛屄?.6 濂戠害锛夛紱浣?`CtObserver<T>` 鏈韩鏄?*鍗曟ā鏉垮弬鏁板埆鍚?*锛埪?.2 瀹氫箟锛夛紝`addObserver` 鐨勭鍚嶄竴寰嬪啓浣?`addObserver(CtObserver<T>, ...)`锛?*涓嶆槸** `CtObserver<T, CtDispatchContext>`鈥斺€擱ev 3 N2 宸蹭慨澶嶏級銆備笁涓埆鍚嶅潎涓?`std::function`锛圫BO 鍙嬪ソ锛夛紝鍙厑璁稿湪**娉ㄥ唽 API 杈圭晫**鏋勯€狅紝缁濅笉鍦ㄥ垎鍙戠儹璺緞鏋勯€狅紙搂11.1锛夈€?
+### 5.3 `src/event/` 涓嬬殑鍏紑鏂囦欢甯冨眬
 
 ```
 src/event/
-├── CMakeLists.txt                 （不变：INTERFACE 库 crisp::event，cxx_std_17）
-├── ct_event.h                     保留+修改：CtEvent<T>, CtEventTraits, CtTracePhase（Rev 7 P1-3 移入）, CtEventOrigin, CtDispatchResult
-├── ct_type_key.h                  新增：CtTypeKey<T>, fnv1a (detail), CRISP_EVENT_TYPE 宏
-├── ct_event_set.h                 新增：CtEventSet<Ts...>, CtAnyEvent 别名, visit() 辅助
-├── ct_receiver.h                  新增：CtReceiver (enable_shared_from_this, affinity, bindHandler)
-├── ct_dispatch_context.h          新增：CtDispatchContext
-├── ct_handler_token.h             新增：CtHandlerId, CtHandlerToken, CtHandlerPriority（§7.15 并入）
-├── ct_thread_affinity.h           新增：CtThreadAffinity
-├── ct_dispatcher.h                保留+修改：CtDispatcher<EventSet>（COW 表、管线、send/post/postTo）
-├── ct_trace.h                     保留+修改：CtTraceRecord, CtTrace（无锁环；相位从 ct_event.h 取，Rev 7 P1-3）
-├── ct_queue.h                     新增：CtQueueBase（类型擦除 + eventSetId）, CtPendingEventBase（公开）, CtPendingEvent<EventSet>, CtQueue<EventSet>（优先级插入、popDropped）
-├── ct_event_loop.h                新增：CtEventLoop（每线程、exec/quit、attachSource、current()/attachToCurrentThread）
-├── ct_event_source.h              新增：CtEventSource（抽象）
-├── ct_timer_event_source.h        新增：CtTimerEventSource, CtTimerId, CtTimerPayload
-├── ct_errors.h                    新增：CtEventError, CtAffinityError, CtNoQueueError
-└── （未来）ct_opaque_event.h       推迟（M4）
-```
+鈹溾攢鈹€ CMakeLists.txt                 锛堜笉鍙橈細INTERFACE 搴?crisp::event锛宑xx_std_17锛?鈹溾攢鈹€ ct_event.h                     淇濈暀+淇敼锛欳tEvent<T>, CtEventTraits, CtTracePhase锛圧ev 7 P1-3 绉诲叆锛? CtEventOrigin, CtDispatchResult
+鈹溾攢鈹€ ct_type_key.h                  鏂板锛欳tTypeKey<T>, fnv1a (detail), CRISP_EVENT_TYPE 瀹?鈹溾攢鈹€ ct_event_set.h                 鏂板锛欳tEventSet<Ts...>, CtAnyEvent 鍒悕, visit() 杈呭姪
+鈹溾攢鈹€ ct_receiver.h                  鏂板锛欳tReceiver (enable_shared_from_this, affinity, bindHandler)
+鈹溾攢鈹€ ct_dispatch_context.h          鏂板锛欳tDispatchContext
+鈹溾攢鈹€ ct_handler_token.h             鏂板锛欳tHandlerId, CtHandlerToken, CtHandlerPriority锛埪?.15 骞跺叆锛?鈹溾攢鈹€ ct_thread_affinity.h           鏂板锛欳tThreadAffinity
+鈹溾攢鈹€ ct_dispatcher.h                淇濈暀+淇敼锛欳tDispatcher<EventSet>锛圕OW 琛ㄣ€佺绾裤€乻end/post/postTo锛?鈹溾攢鈹€ ct_trace.h                     淇濈暀+淇敼锛欳tTraceRecord, CtTrace锛堟棤閿佺幆锛涚浉浣嶄粠 ct_event.h 鍙栵紝Rev 7 P1-3锛?鈹溾攢鈹€ ct_queue.h                     鏂板锛欳tQueueBase锛堢被鍨嬫摝闄?+ eventSetId锛? CtPendingEventBase锛堝叕寮€锛? CtPendingEvent<EventSet>, CtQueue<EventSet>锛堜紭鍏堢骇鎻掑叆銆乸opDropped锛?鈹溾攢鈹€ ct_event_loop.h                鏂板锛欳tEventLoop锛堟瘡绾跨▼銆乪xec/quit銆乤ttachSource銆乧urrent()/attachToCurrentThread锛?鈹溾攢鈹€ ct_event_source.h              鏂板锛欳tEventSource锛堟娊璞★級
+鈹溾攢鈹€ ct_timer_event_source.h        鏂板锛欳tTimerEventSource, CtTimerId, CtTimerPayload
+鈹溾攢鈹€ ct_errors.h                    鏂板锛欳tEventError, CtAffinityError, CtNoQueueError
+鈹斺攢鈹€ 锛堟湭鏉ワ級ct_opaque_event.h       鎺ㄨ繜锛圡4锛?```
 
-头文件必须自包含（`#pragma once`，含全部依赖）且可独立编译。模板代码位于头文件（语言要求的 .cpp/.h 分离例外）；所有非模板机制（`CtTrace`、`CtQueue` 存储、错误类型）在 M1/M2 加入的 `.cpp` 中实现，且不改变消费方接口。库保持 `INTERFACE` 直到引入 `.cpp`；届时改 `add_library(crisp_event STATIC)`。
+澶存枃浠跺繀椤昏嚜鍖呭惈锛坄#pragma once`锛屽惈鍏ㄩ儴渚濊禆锛変笖鍙嫭绔嬬紪璇戙€傛ā鏉夸唬鐮佷綅浜庡ご鏂囦欢锛堣瑷€瑕佹眰鐨?.cpp/.h 鍒嗙渚嬪锛夛紱鎵€鏈夐潪妯℃澘鏈哄埗锛坄CtTrace`銆乣CtQueue` 瀛樺偍銆侀敊璇被鍨嬶級鍦?M1/M2 鍔犲叆鐨?`.cpp` 涓疄鐜帮紝涓斾笉鏀瑰彉娑堣垂鏂规帴鍙ｃ€傚簱淇濇寔 `INTERFACE` 鐩村埌寮曞叆 `.cpp`锛涘眾鏃舵敼 `add_library(crisp_event STATIC)`銆?
+### 5.4 鍛藉悕鍐茬獊瑙ｅ喅
 
-### 5.4 命名冲突解决
-
-v0 的 `enum class CtEventSource { kSystem, kApplication }` **改名**为 `enum class CtEventOrigin`。`CtEventSource` 这个名字预留给 `03-rewrite-proposal.md` §3.5 要求的抽象平台源接口。`CtEvent` 成员 `source` 相应改名 `origin`。
-
+v0 鐨?`enum class CtEventSource { kSystem, kApplication }` **鏀瑰悕**涓?`enum class CtEventOrigin`銆俙CtEventSource` 杩欎釜鍚嶅瓧棰勭暀缁?`03-rewrite-proposal.md` 搂3.5 瑕佹眰鐨勬娊璞″钩鍙版簮鎺ュ彛銆俙CtEvent` 鎴愬憳 `source` 鐩稿簲鏀瑰悕 `origin`銆?
 ---
 
-## 6. 机制设计（Mechanisms）
-
-本节回答"每个机制**如何**做到设计原则承诺的事"。只给出机制与不变量；精确接口签名在 §7。
-
-### 6.1 类型键：地址派生唯一键（CtTypeKey）
-
-**问题**：v0 用 `fnv1a(CtEventTraits<T>::name)` 做 64 位哈希键。`CtEventTraits` 未特化时所有类型落到同一个 name（`"CtEvent"`），键碰撞导致跨 TU 分发到错误 handler；即使特化，FNV-1a 也只是 64 位概率性唯一。
-
-**方案**：`CtTypeKey<T>::value()` 返回**编译期锚点对象的地址**。每个 `T` 实例化一个不同的 `inline` 静态数据成员；C++17 保证 `inline` 变量跨 TU 是同一实体（ODR），因此：
-
-- 同一 `T` 在任何 TU 中键相同（内联语义统一）；
-- 不同 `T` 键不同（不同类型 → 不同对象 → 不同地址）；
-- 键稳定性：只要程序不重新链接，地址不变（M4 之前不做跨进程持久化需求）。
-
+## 6. 鏈哄埗璁捐锛圡echanisms锛?
+鏈妭鍥炵瓟"姣忎釜鏈哄埗**濡備綍**鍋氬埌璁捐鍘熷垯鎵胯鐨勪簨"銆傚彧缁欏嚭鏈哄埗涓庝笉鍙橀噺锛涚簿纭帴鍙ｇ鍚嶅湪 搂7銆?
+### 6.1 绫诲瀷閿細鍦板潃娲剧敓鍞竴閿紙CtTypeKey锛?
+**闂**锛歷0 鐢?`fnv1a(CtEventTraits<T>::name)` 鍋?64 浣嶅搱甯岄敭銆俙CtEventTraits` 鏈壒鍖栨椂鎵€鏈夌被鍨嬭惤鍒板悓涓€涓?name锛坄"CtEvent"`锛夛紝閿鎾炲鑷磋法 TU 鍒嗗彂鍒伴敊璇?handler锛涘嵆浣跨壒鍖栵紝FNV-1a 涔熷彧鏄?64 浣嶆鐜囨€у敮涓€銆?
+**鏂规**锛歚CtTypeKey<T>::value()` 杩斿洖**缂栬瘧鏈熼敋鐐瑰璞＄殑鍦板潃**銆傛瘡涓?`T` 瀹炰緥鍖栦竴涓笉鍚岀殑 `inline` 闈欐€佹暟鎹垚鍛橈紱C++17 淇濊瘉 `inline` 鍙橀噺璺?TU 鏄悓涓€瀹炰綋锛圤DR锛夛紝鍥犳锛?
+- 鍚屼竴 `T` 鍦ㄤ换浣?TU 涓敭鐩稿悓锛堝唴鑱旇涔夌粺涓€锛夛紱
+- 涓嶅悓 `T` 閿笉鍚岋紙涓嶅悓绫诲瀷 鈫?涓嶅悓瀵硅薄 鈫?涓嶅悓鍦板潃锛夛紱
+- 閿ǔ瀹氭€э細鍙绋嬪簭涓嶉噸鏂伴摼鎺ワ紝鍦板潃涓嶅彉锛圡4 涔嬪墠涓嶅仛璺ㄨ繘绋嬫寔涔呭寲闇€姹傦級銆?
 ```cpp
-// ct_type_key.h（新增，接口摘录）
-namespace crisp::event::detail {
+// ct_type_key.h锛堟柊澧烇紝鎺ュ彛鎽樺綍锛?namespace crisp::event::detail {
 /// Empty tag type whose address serves as a unique, TU-stable identity.
 struct CtTypeAnchor {};
 } // namespace crisp::event::detail
@@ -412,7 +237,7 @@ namespace crisp::event {
 /// The key is the address of a function-template-scoped inline static data
 /// member. C++17 guarantees exactly one entity per (template, argument)
 /// specialization across the whole program, so `CtTypeKey<A>::value()` and
-/// `CtTypeKey<B>::value()` can never collide — no hashing, no RTTI.
+/// `CtTypeKey<B>::value()` can never collide 鈥?no hashing, no RTTI.
 template <typename T>
 struct CtTypeKey {
     using value_type = uint64_t;
@@ -429,23 +254,14 @@ struct CtTypeKey {
 } // namespace crisp::event
 ```
 
-**机制要点**：
-
-1. 键类型固定为 `uint64_t`（32 位指针提升到 64 位，够用且与现有 trace/表结构兼容）。
-2. `reinterpret_cast` 是唯一的 C 风格 cast 豁免——文档明确允许：`uintptr_t` 与 `uint64_t` 之间的指针↔整数转换是标准 `reinterpret_cast` 用法，需注释理由。
-3. **ICF（identical code folding）风险**：链接器可能折叠"机器码相同的函数"，但我们的身份是**数据对象地址**且该地址被取用（逃逸），折叠算法必须保守保留地址唯一的实体。若未来遇到 MSVC `/OPT:ICF` 场景，M4 提供验证测试（§13.2 的跨 TU 键唯一性用例即为此设计）。
-4. 调试可读性仍由 `CtEventTraits<T>::name`（人类可读字符串）提供，键只做机器身份。Trace 记录**同时**存键与名称（§7.5）。
-
-**不变量**：`CtTypeKey<T>::value() == CtTypeKey<T>::value()` 恒真；`T != U` 时 `value()` 不相等（编译期 `std::is_same_v` 保证类型不同，地址不同）。
-
-### 6.2 CtEventTraits：强制特化（static_assert）
-
-**问题**：v0 的 `CtEventTraits<T>` 主模板给了默认 `name = "CtEvent"`，导致未特化类型"能用但键碰撞"。类型安全第一原则要求**未特化 = 编译失败**。
-
-**方案**：主模板提供一个显式无效标记，所有使用事件类型的地方 `static_assert` 校验。
-
+**鏈哄埗瑕佺偣**锛?
+1. 閿被鍨嬪浐瀹氫负 `uint64_t`锛?2 浣嶆寚閽堟彁鍗囧埌 64 浣嶏紝澶熺敤涓斾笌鐜版湁 trace/琛ㄧ粨鏋勫吋瀹癸級銆?2. `reinterpret_cast` 鏄敮涓€鐨?C 椋庢牸 cast 璞佸厤鈥斺€旀枃妗ｆ槑纭厑璁革細`uintptr_t` 涓?`uint64_t` 涔嬮棿鐨勬寚閽堚啍鏁存暟杞崲鏄爣鍑?`reinterpret_cast` 鐢ㄦ硶锛岄渶娉ㄩ噴鐞嗙敱銆?3. **ICF锛坕dentical code folding锛夐闄?*锛氶摼鎺ュ櫒鍙兘鎶樺彔"鏈哄櫒鐮佺浉鍚岀殑鍑芥暟"锛屼絾鎴戜滑鐨勮韩浠芥槸**鏁版嵁瀵硅薄鍦板潃**涓旇鍦板潃琚彇鐢紙閫冮€革級锛屾姌鍙犵畻娉曞繀椤讳繚瀹堜繚鐣欏湴鍧€鍞竴鐨勫疄浣撱€傝嫢鏈潵閬囧埌 MSVC `/OPT:ICF` 鍦烘櫙锛孧4 鎻愪緵楠岃瘉娴嬭瘯锛埪?3.2 鐨勮法 TU 閿敮涓€鎬х敤渚嬪嵆涓烘璁捐锛夈€?4. 璋冭瘯鍙鎬т粛鐢?`CtEventTraits<T>::name`锛堜汉绫诲彲璇诲瓧绗︿覆锛夋彁渚涳紝閿彧鍋氭満鍣ㄨ韩浠姐€俆race 璁板綍**鍚屾椂**瀛橀敭涓庡悕绉帮紙搂7.5锛夈€?
+**涓嶅彉閲?*锛歚CtTypeKey<T>::value() == CtTypeKey<T>::value()` 鎭掔湡锛沗T != U` 鏃?`value()` 涓嶇浉绛夛紙缂栬瘧鏈?`std::is_same_v` 淇濊瘉绫诲瀷涓嶅悓锛屽湴鍧€涓嶅悓锛夈€?
+### 6.2 CtEventTraits锛氬己鍒剁壒鍖栵紙static_assert锛?
+**闂**锛歷0 鐨?`CtEventTraits<T>` 涓绘ā鏉跨粰浜嗛粯璁?`name = "CtEvent"`锛屽鑷存湭鐗瑰寲绫诲瀷"鑳界敤浣嗛敭纰版挒"銆傜被鍨嬪畨鍏ㄧ涓€鍘熷垯瑕佹眰**鏈壒鍖?= 缂栬瘧澶辫触**銆?
+**鏂规**锛氫富妯℃澘鎻愪緵涓€涓樉寮忔棤鏁堟爣璁帮紝鎵€鏈変娇鐢ㄤ簨浠剁被鍨嬬殑鍦版柟 `static_assert` 鏍￠獙銆?
 ```cpp
-// ct_event.h（保留+修改，接口摘录）
+// ct_event.h锛堜繚鐣?淇敼锛屾帴鍙ｆ憳褰曪級
 namespace crisp::event {
 
 /// Compile-time metadata for payload type T.
@@ -462,8 +278,7 @@ struct CtEventTraits {
 } // namespace crisp::event
 
 /// Macro that expands to a specialization of CtEventTraits.
-/// This is plain preprocessor expansion of a template specialization —
-/// NOT code generation (no moc, no qmake, no reflection).
+/// This is plain preprocessor expansion of a template specialization 鈥?/// NOT code generation (no moc, no qmake, no reflection).
 #define CRISP_EVENT_TYPE(TYPE, NAME)                                   \
     static_assert(!std::is_same_v<TYPE, void>,                          \
                   "CRISP_EVENT_TYPE: TYPE must be a concrete type");    \
@@ -476,23 +291,15 @@ struct CtEventTraits {
     }
 ```
 
-**强制点（三处 static_assert）**：
+**寮哄埗鐐癸紙涓夊 static_assert锛?*锛?
+1. `CtEvent<T>` 绫讳綋鍐咃細`static_assert(CtEventTraits<T>::kIsValid, "CtEvent<T> requires CRISP_EVENT_TYPE(T, ...)")`鈥斺€旀瀯閫犱簨浠跺繀椤诲厛鐗瑰寲 traits銆?2. `CtDispatcher::addHandler<T>/send<T>/post<T>` 鍐呴儴锛氬悓涓€鏂█鈥斺€旀敞鍐?鎶曢€掑繀椤诲厛鐗瑰寲 traits銆?3. `CtEventSet<Ts...>` 鎶樺彔灞曞紑锛氬姣忎釜 `Ts` 鏂█鈥斺€旇繘鍏ラ棴鍚堜簨浠堕泦蹇呴』鍏堢壒鍖栥€?
+**瀹忚涔?*锛歚CRISP_EVENT_TYPE(TYPE, NAME)` 灞曞紑涓哄 `crisp::event::CtEventTraits<TYPE>` 鐨勭壒鍖栥€傚繀椤诲湪**鍛藉悕绌洪棿澶?*鐨勬枃浠朵綔鐢ㄥ煙璋冪敤锛堝畯鍐呴儴鎵撳紑 `crisp::event`锛夈€俙NAME` 蹇呴』鏄瓧绗︿覆瀛楅潰閲忋€傝繖涓嶆槸浠ｇ爜鐢熸垚锛氫骇鐗╁氨鏄櫘閫?C++ 妯℃澘鐗瑰寲锛宮oc 涓嶅瓨鍦紝缂栬瘧鏈熷嵆鍙獙璇併€?
+### 6.3 闂悎浜嬩欢闆嗭細CtEventSet 涓?CtAnyEvent
 
-1. `CtEvent<T>` 类体内：`static_assert(CtEventTraits<T>::kIsValid, "CtEvent<T> requires CRISP_EVENT_TYPE(T, ...)")`——构造事件必须先特化 traits。
-2. `CtDispatcher::addHandler<T>/send<T>/post<T>` 内部：同一断言——注册/投递必须先特化 traits。
-3. `CtEventSet<Ts...>` 折叠展开：对每个 `Ts` 断言——进入闭合事件集必须先特化。
-
-**宏语义**：`CRISP_EVENT_TYPE(TYPE, NAME)` 展开为对 `crisp::event::CtEventTraits<TYPE>` 的特化。必须在**命名空间外**的文件作用域调用（宏内部打开 `crisp::event`）。`NAME` 必须是字符串字面量。这不是代码生成：产物就是普通 C++ 模板特化，moc 不存在，编译期即可验证。
-
-### 6.3 闭合事件集：CtEventSet 与 CtAnyEvent
-
-**问题**：v0 异步路径缺失；要用 `std::variant` 做异构存储，必须先有**编译期闭合的类型集合**。
-
-**方案**：
-
+**闂**锛歷0 寮傛璺緞缂哄け锛涜鐢?`std::variant` 鍋氬紓鏋勫瓨鍌紝蹇呴』鍏堟湁**缂栬瘧鏈熼棴鍚堢殑绫诲瀷闆嗗悎**銆?
+**鏂规**锛?
 ```cpp
-// ct_event_set.h（新增，接口摘录）
-namespace crisp::event {
+// ct_event_set.h锛堟柊澧烇紝鎺ュ彛鎽樺綍锛?namespace crisp::event {
 
 /// A closed set of event payload types known at compile time.
 ///
@@ -515,7 +322,7 @@ struct CtEventSet {
 private:
     template <typename... Us>
     static constexpr bool allDistinct() {
-        return true; // 折叠检查两两 std::is_same_v 为 false（细节实现）
+        return true; // 鎶樺彔妫€鏌ヤ袱涓?std::is_same_v 涓?false锛堢粏鑺傚疄鐜帮級
     }
 };
 
@@ -529,7 +336,7 @@ template <typename T, typename... Ts>
 CtEvent<T>* getIf(CtAnyEvent<Ts...>& any) noexcept;
 
 /// Exhaustive visitor helper: calls `fn` for whichever event the variant
-/// currently holds. Same semantics as std::visit — this exists only as a
+/// currently holds. Same semantics as std::visit 鈥?this exists only as a
 /// convenience with a crisper name for dispatcher internals.
 template <typename Visitor, typename... Ts>
 decltype(auto) visitEvent(Visitor&& fn, CtAnyEvent<Ts...>& any);
@@ -539,22 +346,15 @@ decltype(auto) visitEvent(Visitor&& fn, const CtAnyEvent<Ts...>& any);
 } // namespace crisp::event
 ```
 
-**机制要点**：
+**鏈哄埗瑕佺偣**锛?
+1. `std::variant<CtEvent<Ts>...>` 鏄€艰涔夊鍣細鏍堜笂鎴栭槦鍒?`deque` 涓瓨鍌紝鏃犲爢鍒嗛厤銆佹棤鎸囬拡 cast銆傚彇鍑烘椂 `std::get_if<CtEvent<T>>` 杩斿洖**瀹屾暣绫诲瀷**锛屽垎鍙戞槸 `std::visit` 绌峰敖閬嶅巻鈥斺€斾笉瀛樺湪 v0 鐨?鍐?cast"鎿﹂櫎璋冪敤銆?2. 涓変釜 `static_assert`锛堥潪绌恒€佸叏閮ㄧ壒鍖?traits銆佷袱涓や笉鍚岋級淇濊瘉 variant 鍚堟硶涓斿彲璇汇€?3. `CtDispatcher<CtEventSet<Ts...>>` 鐨勭被鍨嬪煙鍗虫闆嗗悎锛歚send<T>` 瑕佹眰 `T` 灞炰簬闆嗗悎锛坄static_assert`锛夛紝娉ㄥ唽鎺ュ彛鍚岀悊銆?*浠ｄ环**锛氫竴涓?dispatcher 缁戝畾涓€涓棴鍚堥泦锛涢渶瑕佸绉嶄簨浠剁殑搴旂敤鐢ㄦ洿澶ч泦鍚堟垨鍒嗗涓?dispatcher锛埪?.4 璇存槑鍙栬垗锛夈€?4. `CtAnyEvent` 涓烘柟渚垮埆鍚嶏紱`std::visit` 鏈韩鍗崇┓灏藉垎鍙戝伐鍏凤紝鏃犻渶鑷畾涔?`visitEvent`锛堥伩鍏嶄笌鏍囧噯搴撻噸澶?API锛夈€?
+### 6.4 CtHandlerToken锛歊AII 娉ㄩ攢鍙ユ焺
 
-1. `std::variant<CtEvent<Ts>...>` 是值语义容器：栈上或队列 `deque` 中存储，无堆分配、无指针 cast。取出时 `std::get_if<CtEvent<T>>` 返回**完整类型**，分发是 `std::visit` 穷尽遍历——不存在 v0 的"再 cast"擦除调用。
-2. 三个 `static_assert`（非空、全部特化 traits、两两不同）保证 variant 合法且可读。
-3. `CtDispatcher<CtEventSet<Ts...>>` 的类型域即此集合：`send<T>` 要求 `T` 属于集合（`static_assert`），注册接口同理。**代价**：一个 dispatcher 绑定一个闭合集；需要多种事件的应用用更大集合或分多个 dispatcher（§7.4 说明取舍）。
-4. `CtAnyEvent` 为方便别名；`std::visit` 本身即穷尽分发工具，无需自定义 `visitEvent`（避免与标准库重复 API）。
-
-### 6.4 CtHandlerToken：RAII 注销句柄
-
-**问题**：v0 `addHandler` 返回 `bool`，注销只能"销毁 dispatcher 或手动移除"，且裸指针接收者悬垂。要求：**注册是 RAII，析构自动注销**。
-
-**方案**：注册返回 move-only 的 `CtHandlerToken`。token 与 dispatcher 共享一个 `CtTokenState`（`shared_ptr`），其中保存 dispatcher 指针与存活标志：
+**闂**锛歷0 `addHandler` 杩斿洖 `bool`锛屾敞閿€鍙兘"閿€姣?dispatcher 鎴栨墜鍔ㄧЩ闄?锛屼笖瑁告寚閽堟帴鏀惰€呮偓鍨傘€傝姹傦細**娉ㄥ唽鏄?RAII锛屾瀽鏋勮嚜鍔ㄦ敞閿€**銆?
+**鏂规**锛氭敞鍐岃繑鍥?move-only 鐨?`CtHandlerToken`銆倀oken 涓?dispatcher 鍏变韩涓€涓?`CtTokenState`锛坄shared_ptr`锛夛紝鍏朵腑淇濆瓨 dispatcher 鎸囬拡涓庡瓨娲绘爣蹇楋細
 
 ```cpp
-// ct_handler_token.h（新增，接口摘录）
-namespace crisp::event {
+// ct_handler_token.h锛堟柊澧烇紝鎺ュ彛鎽樺綍锛?namespace crisp::event {
 
 using CtHandlerId = uint64_t;  ///< globally unique handler id (atomic counter)
 
@@ -562,8 +362,8 @@ namespace detail {
 /// Shared state linking a handler token to its owning dispatcher.
 /// Created on registration; alive=false once the dispatcher is gone.
 /// (Rev 2, P2-10) `owner` is a weak_ptr to the dispatcher base so a token
-/// destroyed on an arbitrary thread (§7.7 契约 #6) can never dereference
-/// a dispatcher that is mid-destruction (see 机制要点 #1 and §9.2).
+/// destroyed on an arbitrary thread (搂7.7 濂戠害 #6) can never dereference
+/// a dispatcher that is mid-destruction (see 鏈哄埗瑕佺偣 #1 and 搂9.2).
 struct CtTokenState {
     std::atomic<bool> alive{true};          ///< false once the dispatcher is gone
     std::weak_ptr<CtDispatcherBase> owner;  ///< owning dispatcher (weak, Rev 2)
@@ -578,7 +378,7 @@ struct CtTokenState {
 /// A token outliving its dispatcher is safe: the dispatcher's destructor
 /// flips `CtTokenState::alive`, and the token's destructor then skips the
 /// (dangling) unregister call.
-/// (Rev 5, P2-6) This is an EXCERPT — §7.7 is authoritative. The final
+/// (Rev 5, P2-6) This is an EXCERPT 鈥?搂7.7 is authoritative. The final
 /// CtHandlerToken has NO m_id member (id() delegates to m_state->id) and
 /// NO reset() (destroying the token unregisters; valid() reports state).
 class CtHandlerToken {
@@ -604,41 +404,32 @@ private:
 } // namespace crisp::event
 ```
 
-**机制要点**：
-
-1. **生命周期契约（Rev 2, P2-10 更新）**：`CtTokenState` 由 dispatcher 构造时创建；dispatcher 析构时持 `m_writeMutex` 翻转 `alive=false` 并清空 `owner`（§9.2 契约 #1 的锁内双检）。token 析构：若 `alive` 已为 false 则跳过 unregister（不触碰 dispatcher 内存）；否则 `lock()` 其 `weak_ptr<CtDispatcherBase>` 得 `shared_ptr`（引用计数 +1，**保证 dispatcher 在注销例程执行期间不会析构**），再调 `owner->unregisterHandler(id)`（该例程自身持 `m_writeMutex`）。锁内双检 + weak_ptr 引用计数两道防线共同关闭 "token 读到 alive=true → dispatcher 析构中 → owner 悬垂" 的竞态窗口。**token 比 dispatcher 长寿不会 UB**（这是设计承诺，§9 详述）。
-2. **所有权**：注册时 dispatcher 表存 `weak_ptr<CtReceiver>`（不延长接收者生命周期）+ 强存 handler 可调用对象 + token 强持 `CtTokenState`。注销 = 从快照表中移除该 `CtHandlerId` 的条目（COW 表，§6.5）。
-3. **move 语义**：move 转移 `m_state`，源 token 置空（`valid()==false`）。禁止拷贝（一份注册只能有一个注销者）。`id()` 经 `m_state->id` 取值（§7.7）。
-4. **热路径**：token 的 `shared_ptr` 分配只发生在注册时（非热路径）；分发时表内只读。
-
-### 6.5 COW 分发表（Copy-on-Write Dispatch Tables）
-
-**问题**：v0 每次分发做 `unordered_map` 查找且注册/分发共用可变表，无并发概念。要求"热路径零堆分配 + 只读访问"。
-
-**方案**：三种表（handlers / filters / observers）聚合为一个**不可变快照** `CtDispatchTables`，由 `std::shared_ptr<const CtDispatchTables>` 持有并**原子发布**。写路径（注册/注销）持互斥锁拷贝-修改-发布；读路径（分发）原子取快照后全程只读——分发中注册/注销产生新快照，不影响本次分发的一致性视图。
-
+**鏈哄埗瑕佺偣**锛?
+1. **鐢熷懡鍛ㄦ湡濂戠害锛圧ev 2, P2-10 鏇存柊锛?*锛歚CtTokenState` 鐢?dispatcher 鏋勯€犳椂鍒涘缓锛沝ispatcher 鏋愭瀯鏃舵寔 `m_writeMutex` 缈昏浆 `alive=false` 骞舵竻绌?`owner`锛埪?.2 濂戠害 #1 鐨勯攣鍐呭弻妫€锛夈€倀oken 鏋愭瀯锛氳嫢 `alive` 宸蹭负 false 鍒欒烦杩?unregister锛堜笉瑙︾ dispatcher 鍐呭瓨锛夛紱鍚﹀垯 `lock()` 鍏?`weak_ptr<CtDispatcherBase>` 寰?`shared_ptr`锛堝紩鐢ㄨ鏁?+1锛?*淇濊瘉 dispatcher 鍦ㄦ敞閿€渚嬬▼鎵ц鏈熼棿涓嶄細鏋愭瀯**锛夛紝鍐嶈皟 `owner->unregisterHandler(id)`锛堣渚嬬▼鑷韩鎸?`m_writeMutex`锛夈€傞攣鍐呭弻妫€ + weak_ptr 寮曠敤璁℃暟涓ら亾闃茬嚎鍏卞悓鍏抽棴 "token 璇诲埌 alive=true 鈫?dispatcher 鏋愭瀯涓?鈫?owner 鎮瀭" 鐨勭珵鎬佺獥鍙ｃ€?*token 姣?dispatcher 闀垮涓嶄細 UB**锛堣繖鏄璁℃壙璇猴紝搂9 璇﹁堪锛夈€?2. **鎵€鏈夋潈**锛氭敞鍐屾椂 dispatcher 琛ㄥ瓨 `weak_ptr<CtReceiver>`锛堜笉寤堕暱鎺ユ敹鑰呯敓鍛藉懆鏈燂級+ 寮哄瓨 handler 鍙皟鐢ㄥ璞?+ token 寮烘寔 `CtTokenState`銆傛敞閿€ = 浠庡揩鐓ц〃涓Щ闄よ `CtHandlerId` 鐨勬潯鐩紙COW 琛紝搂6.5锛夈€?3. **move 璇箟**锛歮ove 杞Щ `m_state`锛屾簮 token 缃┖锛坄valid()==false`锛夈€傜姝㈡嫹璐濓紙涓€浠芥敞鍐屽彧鑳芥湁涓€涓敞閿€鑰咃級銆俙id()` 缁?`m_state->id` 鍙栧€硷紙搂7.7锛夈€?4. **鐑矾寰?*锛歵oken 鐨?`shared_ptr` 鍒嗛厤鍙彂鐢熷湪娉ㄥ唽鏃讹紙闈炵儹璺緞锛夛紱鍒嗗彂鏃惰〃鍐呭彧璇汇€?
+### 6.5 COW 鍒嗗彂琛紙Copy-on-Write Dispatch Tables锛?
+**闂**锛歷0 姣忔鍒嗗彂鍋?`unordered_map` 鏌ユ壘涓旀敞鍐?鍒嗗彂鍏辩敤鍙彉琛紝鏃犲苟鍙戞蹇点€傝姹?鐑矾寰勯浂鍫嗗垎閰?+ 鍙璁块棶"銆?
+**鏂规**锛氫笁绉嶈〃锛坔andlers / filters / observers锛夎仛鍚堜负涓€涓?*涓嶅彲鍙樺揩鐓?* `CtDispatchTables`锛岀敱 `std::shared_ptr<const CtDispatchTables>` 鎸佹湁骞?*鍘熷瓙鍙戝竷**銆傚啓璺緞锛堟敞鍐?娉ㄩ攢锛夋寔浜掓枼閿佹嫹璐?淇敼-鍙戝竷锛涜璺緞锛堝垎鍙戯級鍘熷瓙鍙栧揩鐓у悗鍏ㄧ▼鍙鈥斺€斿垎鍙戜腑娉ㄥ唽/娉ㄩ攢浜х敓鏂板揩鐓э紝涓嶅奖鍝嶆湰娆″垎鍙戠殑涓€鑷存€ц鍥俱€?
 ```cpp
-// ct_dispatcher.h（保留+修改，机制摘录）
-// (Rev 6, P1-2) CtDispatchTables lives in crisp::event::detail — it is a pure
-// implementation detail (erased storage), and §7.8 references it as
+// ct_dispatcher.h锛堜繚鐣?淇敼锛屾満鍒舵憳褰曪級
+// (Rev 6, P1-2) CtDispatchTables lives in crisp::event::detail 鈥?it is a pure
+// implementation detail (erased storage), and 搂7.8 references it as
 // detail::CtDispatchTables. Keeping it out of the public namespace avoids a
-// namespace mismatch between §6.5 and §7.8.
+// namespace mismatch between 搂6.5 and 搂7.8.
 namespace crisp::event::detail {
 
-/// Type-erased registration callbacks (Rev 7, P2-1 + Rev 8, P1-1 — precise
-/// definitions so the coder need not guess; signatures ALIGN with §5.2's
+/// Type-erased registration callbacks (Rev 7, P2-1 + Rev 8, P1-1 鈥?precise
+/// definitions so the coder need not guess; signatures ALIGN with 搂5.2's
 /// public aliases). All are std::function wrappers built ONCE at
 /// registration time (write path, allocation allowed); dispatch invokes them
-/// with a pointer cast back to the concrete CtEvent<T> — the SAME disciplined
-/// cast as §6.5's key-match assert (§8.1/§8.2 never call them otherwise).
-///   - ErasedHandler:  void(void* event)            — event = CtEvent<T>*   (non-const: handler may accept())
-///   - ErasedFilter:   bool(void* event)            — event = CtEvent<T>*   (non-const to match §5.2 CtFilter<T>)
+/// with a pointer cast back to the concrete CtEvent<T> 鈥?the SAME disciplined
+/// cast as 搂6.5's key-match assert (搂8.1/搂8.2 never call them otherwise).
+///   - ErasedHandler:  void(void* event)            鈥?event = CtEvent<T>*   (non-const: handler may accept())
+///   - ErasedFilter:   bool(void* event)            鈥?event = CtEvent<T>*   (non-const to match 搂5.2 CtFilter<T>)
 ///   - ErasedObserver: void(const void* event, const CtDispatchContext& ctx)
-///                                                  — event = const CtEvent<T>* (pure read-only, §5.2);
+///                                                  鈥?event = const CtEvent<T>* (pure read-only, 搂5.2);
 ///                                                    phase = ctx.phase() (Rev 8, P1-1: the observer needs the
-///                                                    FULL context — receiverId/filterIndex/elapsed/handlerCount —
-///                                                    a bare CtTracePhase cannot carry them, and the wrapper
-///                                                    cannot fabricate a CtDispatchContext (§7.6 private ctor).
+///                                                    FULL context 鈥?receiverId/filterIndex/elapsed/handlerCount 鈥?///                                                    a bare CtTracePhase cannot carry them, and the wrapper
+///                                                    cannot fabricate a CtDispatchContext (搂7.6 private ctor).
 using ErasedHandler  = std::function<void(void*)>;
 using ErasedFilter   = std::function<bool(void*)>;
 using ErasedObserver = std::function<void(const void*, const CtDispatchContext&)>;
@@ -674,65 +465,58 @@ struct CtDispatchTables {
 } // namespace crisp::event::detail
 ```
 
-**发布机制（写入路径）**：成员声明为**普通** `std::shared_ptr<const CtDispatchTables>`，配合 C++17 标准自由函数 `std::atomic_load(&m_tables)` / `std::atomic_store(&m_tables, ptr)`（`<memory>`，对 `shared_ptr` 提供原子访问；C++20 弃用但可用，**M4 升级工具链后换 `std::atomic<std::shared_ptr<...>>`（P0718）成员**——这是成员为什么保持普通 `shared_ptr` 的原因，Rev 2, P1-3）。注册/注销临界区由 `std::mutex` 保护（**注册不是热路径**，允许锁）：
+**鍙戝竷鏈哄埗锛堝啓鍏ヨ矾寰勶級**锛氭垚鍛樺０鏄庝负**鏅€?* `std::shared_ptr<const CtDispatchTables>`锛岄厤鍚?C++17 鏍囧噯鑷敱鍑芥暟 `std::atomic_load(&m_tables)` / `std::atomic_store(&m_tables, ptr)`锛坄<memory>`锛屽 `shared_ptr` 鎻愪緵鍘熷瓙璁块棶锛汣++20 寮冪敤浣嗗彲鐢紝**M4 鍗囩骇宸ュ叿閾惧悗鎹?`std::atomic<std::shared_ptr<...>>`锛圥0718锛夋垚鍛?*鈥斺€旇繖鏄垚鍛樹负浠€涔堜繚鎸佹櫘閫?`shared_ptr` 鐨勫師鍥狅紝Rev 2, P1-3锛夈€傛敞鍐?娉ㄩ攢涓寸晫鍖虹敱 `std::mutex` 淇濇姢锛?*娉ㄥ唽涓嶆槸鐑矾寰?*锛屽厑璁搁攣锛夛細
 
-1. 持锁 → 拷贝 `*m_tables`（浅拷贝：`unordered_map` 与 `vector` 拷贝，**唯一允许在写路径发生堆分配**）→ 增删条目 → `version+1` → `std::atomic_store`。
-2. 所有读方 `std::atomic_load` 拿到快照；旧快照由最后一个持有者释放。
-
-**读路径（分发）**：进入 `send/broadcast` 时取一次快照 `auto tables = std::atomic_load(&m_tables);`，后续所有查找都针对 `*tables`。
-
-> **性能如实声明（Rev 2, P2-7）**：C++17 的 `std::atomic_load(shared_ptr)` 在 libstdc++ 与 MSVC 中**内部各有锁**（实现细节，非标准要求），因此 COW 读入口并非字面意义的"零锁"——它是**一次标准库内部锁（低竞争：仅与写路径的短暂 `atomic_store` 竞争）+ 无写路径互斥**；热路径其余部分（表查找、trace、管线）零锁零分配。**M4 换 C++20 `std::atomic<shared_ptr>`（无锁实现）或自研原子指针（无锁栈/acquire-release CAS）后，读入口才达到真零锁**。写路径（注册/注销）依然是**唯一**持 `m_writeMutex` 的路径；`atomic_load/atomic_store` 的锁与 `m_writeMutex` 正交。测试断言"分发零分配"不受此影响（§13.1 用例 #12），但 §11.1/§11.2 的"零锁"表述已按此声明修正。
-
-**擦除调用安全性**：`ErasedHandler/Filter/Observer` 仍是 `std::function` 包装（注册时构造，非热路径）。调用时从 `CtAnyEvent`/`CtEvent<T>&` 取地址——与 v0 不同，**类型键零碰撞**（§6.1），且注册接口 `static_assert` 了 `T` 属于集合，`getIf<T>` 只可能命中，因此在分发入口处一次 `std::get_if<CtEvent<T>>` 失败即断言（§8.2），杜绝静默类型混淆。文档明确：**擦除 lambda 仅在键匹配断言通过后调用**。
-
-**不变量**：分发期间观察到的表集合是单调一致快照（无半更新）；注册/注销不阻塞分发；`version` 单调递增供测试断言 COW 发布次数。
-
-**类型擦除边界类型（Rev 3, N4 / Rev 4, P1-5 定义；供 §7.10 `CtQueueBase` 与 §7.8 `dispatchAny` 使用）**：队列↔loop↔dispatcher 边界需要**一次**类型擦除（避免 loop/queue 依赖具体 `EventSet`）。擦除发生在边界，分发管线内仍是强类型（`std::visit` 还原，§10.1 契约 #5）：
+1. 鎸侀攣 鈫?鎷疯礉 `*m_tables`锛堟祬鎷疯礉锛歚unordered_map` 涓?`vector` 鎷疯礉锛?*鍞竴鍏佽鍦ㄥ啓璺緞鍙戠敓鍫嗗垎閰?*锛夆啋 澧炲垹鏉＄洰 鈫?`version+1` 鈫?`std::atomic_store`銆?2. 鎵€鏈夎鏂?`std::atomic_load` 鎷垮埌蹇収锛涙棫蹇収鐢辨渶鍚庝竴涓寔鏈夎€呴噴鏀俱€?
+**璇昏矾寰勶紙鍒嗗彂锛?*锛氳繘鍏?`send/broadcast` 鏃跺彇涓€娆″揩鐓?`auto tables = std::atomic_load(&m_tables);`锛屽悗缁墍鏈夋煡鎵鹃兘閽堝 `*tables`銆?
+> **鎬ц兘濡傚疄澹版槑锛圧ev 2, P2-7锛?*锛欳++17 鐨?`std::atomic_load(shared_ptr)` 鍦?libstdc++ 涓?MSVC 涓?*鍐呴儴鍚勬湁閿?*锛堝疄鐜扮粏鑺傦紝闈炴爣鍑嗚姹傦級锛屽洜姝?COW 璇诲叆鍙ｅ苟闈炲瓧闈㈡剰涔夌殑"闆堕攣"鈥斺€斿畠鏄?*涓€娆℃爣鍑嗗簱鍐呴儴閿侊紙浣庣珵浜夛細浠呬笌鍐欒矾寰勭殑鐭殏 `atomic_store` 绔炰簤锛? 鏃犲啓璺緞浜掓枼**锛涚儹璺緞鍏朵綑閮ㄥ垎锛堣〃鏌ユ壘銆乼race銆佺绾匡級闆堕攣闆跺垎閰嶃€?*M4 鎹?C++20 `std::atomic<shared_ptr>`锛堟棤閿佸疄鐜帮級鎴栬嚜鐮斿師瀛愭寚閽堬紙鏃犻攣鏍?acquire-release CAS锛夊悗锛岃鍏ュ彛鎵嶈揪鍒扮湡闆堕攣**銆傚啓璺緞锛堟敞鍐?娉ㄩ攢锛変緷鐒舵槸**鍞竴**鎸?`m_writeMutex` 鐨勮矾寰勶紱`atomic_load/atomic_store` 鐨勯攣涓?`m_writeMutex` 姝ｄ氦銆傛祴璇曟柇瑷€"鍒嗗彂闆跺垎閰?涓嶅彈姝ゅ奖鍝嶏紙搂13.1 鐢ㄤ緥 #12锛夛紝浣?搂11.1/搂11.2 鐨?闆堕攣"琛ㄨ堪宸叉寜姝ゅ０鏄庝慨姝ｃ€?
+**鎿﹂櫎璋冪敤瀹夊叏鎬?*锛歚ErasedHandler/Filter/Observer` 浠嶆槸 `std::function` 鍖呰锛堟敞鍐屾椂鏋勯€狅紝闈炵儹璺緞锛夈€傝皟鐢ㄦ椂浠?`CtAnyEvent`/`CtEvent<T>&` 鍙栧湴鍧€鈥斺€斾笌 v0 涓嶅悓锛?*绫诲瀷閿浂纰版挒**锛埪?.1锛夛紝涓旀敞鍐屾帴鍙?`static_assert` 浜?`T` 灞炰簬闆嗗悎锛宍getIf<T>` 鍙彲鑳藉懡涓紝鍥犳鍦ㄥ垎鍙戝叆鍙ｅ涓€娆?`std::get_if<CtEvent<T>>` 澶辫触鍗虫柇瑷€锛埪?.2锛夛紝鏉滅粷闈欓粯绫诲瀷娣锋穯銆傛枃妗ｆ槑纭細**鎿﹂櫎 lambda 浠呭湪閿尮閰嶆柇瑷€閫氳繃鍚庤皟鐢?*銆?
+**涓嶅彉閲?*锛氬垎鍙戞湡闂磋瀵熷埌鐨勮〃闆嗗悎鏄崟璋冧竴鑷村揩鐓э紙鏃犲崐鏇存柊锛夛紱娉ㄥ唽/娉ㄩ攢涓嶉樆濉炲垎鍙戯紱`version` 鍗曡皟閫掑渚涙祴璇曟柇瑷€ COW 鍙戝竷娆℃暟銆?
+**绫诲瀷鎿﹂櫎杈圭晫绫诲瀷锛圧ev 3, N4 / Rev 4, P1-5 瀹氫箟锛涗緵 搂7.10 `CtQueueBase` 涓?搂7.8 `dispatchAny` 浣跨敤锛?*锛氶槦鍒椻啍loop鈫攄ispatcher 杈圭晫闇€瑕?*涓€娆?*绫诲瀷鎿﹂櫎锛堥伩鍏?loop/queue 渚濊禆鍏蜂綋 `EventSet`锛夈€傛摝闄ゅ彂鐢熷湪杈圭晫锛屽垎鍙戠绾垮唴浠嶆槸寮虹被鍨嬶紙`std::visit` 杩樺師锛屄?0.1 濂戠害 #5锛夛細
 
 ```cpp
 namespace crisp::event {
 /// Base of a pending (asynchronously queued) event: common delivery fields.
 /// ABSTRACT base used ONLY via reference semantics (never stored by value;
-/// the boundary is reference/pointer, §7.10 契约 #7). CtPendingEvent<EventSet>
+/// the boundary is reference/pointer, 搂7.10 濂戠害 #7). CtPendingEvent<EventSet>
 /// derives from it and is stored BY VALUE in the deque; the loop and
 /// dispatcher hold `CtPendingEventBase&`/`CtPendingEventBase*` (base
-/// subobject of a live deque element — no slicing, no heap, no copy).
+/// subobject of a live deque element 鈥?no slicing, no heap, no copy).
 class CtPendingEventBase {
 public:
     virtual ~CtPendingEventBase() = default;
 
-    /// Delivery target; null = broadcast (§8.2).
+    /// Delivery target; null = broadcast (搂8.2).
     const std::weak_ptr<CtReceiver>& target() const noexcept { return m_target; }
 
-    /// True if this is a broadcast (target was EMPTY at push time; §8.2).
+    /// True if this is a broadcast (target was EMPTY at push time; 搂8.2).
     /// (Rev 6, P1-1) This flag is FIXED AT CONSTRUCTION by
-    /// CtPendingEvent<EventSet>'s ctor — NOT derived from a live expired()
+    /// CtPendingEvent<EventSet>'s ctor 鈥?NOT derived from a live expired()
     /// check. An empty weak_ptr and an expired weak_ptr both report
     /// expired()==true, so a live check cannot distinguish "broadcast (must
     /// deliver)" from "target died (skip + kDropped)". The fixed flag can.
     /// (Rev 7, P1-2) Emptiness is tested with
-    /// `m_isBroadcast = !std::weak_ptr<CtReceiver>{}.owner_before(target)` —
-    /// the DEFAULT (empty) weak_ptr is the strict-weak-order minimum, so
+    /// `m_isBroadcast = !std::weak_ptr<CtReceiver>{}.owner_before(target)` 鈥?    /// the DEFAULT (empty) weak_ptr is the strict-weak-order minimum, so
     /// `empty.owner_before(target)` is true exactly when `target` is
     /// NON-empty. The REVERSE (`target.owner_before(empty)`) is false for
     /// both empty and non-empty targets and would mark every event as a
-    /// broadcast — the direction matters.
+    /// broadcast 鈥?the direction matters.
     bool isBroadcast() const noexcept { return m_isBroadcast; }
 
-    /// Ordering hint copied from CtEvent::priority() at push time — the
-    /// event's uint64_t priority (§7.3), NOT CtHandlerPriority (Rev 5, N-4:
-    /// CtHandlerPriority is a filter-ordering key only, §7.15).
+    /// Ordering hint copied from CtEvent::priority() at push time 鈥?the
+    /// event's uint64_t priority (搂7.3), NOT CtHandlerPriority (Rev 5, N-4:
+    /// CtHandlerPriority is a filter-ordering key only, 搂7.15).
     uint64_t priority() const noexcept { return m_priority; }
 
-    /// Dispatcher-assigned sequence number (§8.2).
+    /// Dispatcher-assigned sequence number (搂8.2).
     uint64_t sequence() const noexcept { return m_sequence; }
 
     /// EventSet identity of the queue that CREATED this pending event
-    /// (Rev 8, P2-4: address-derived, §6.1). The drain side (dispatchAny)
+    /// (Rev 8, P2-4: address-derived, 搂6.1). The drain side (dispatchAny)
     /// asserts this == ITS OWN set id BEFORE static_casting the payload to
-    /// its variant type — a payloadTypeKey() check alone cannot detect a
+    /// its variant type 鈥?a payloadTypeKey() check alone cannot detect a
     /// cross-set pending record when two sets share type T (cast would be
-    /// UB). Same discipline as CtAnyEventHolder::eventSetId() (§6.5).
+    /// UB). Same discipline as CtAnyEventHolder::eventSetId() (搂6.5).
     virtual uint64_t eventSetId() const noexcept = 0;
 
     /// CtTypeKey of the payload T (for the dispatcher's set-membership assert).
@@ -740,18 +524,18 @@ public:
 
     /// Pointer to the concrete CtAnyEvent (variant) inside the deque element.
     /// The templated CtDispatcher<EventSet> static_casts this to its known
-    /// variant type AFTER asserting payloadTypeKey() ∈ EventSet — the SAME
-    /// disciplined cast as §6.5 erased handlers (never called otherwise).
+    /// variant type AFTER asserting payloadTypeKey() 鈭?EventSet 鈥?the SAME
+    /// disciplined cast as 搂6.5 erased handlers (never called otherwise).
     /// (Rev 11, P2-2 + Rev 12, P1-1) NON-const return AND non-const member
-    /// function: dispatchAny runs the §8.1 pipeline which resets accepted
-    /// (Step 3) and passes non-const CtEvent<T>& to handlers/filters (§5.2).
+    /// function: dispatchAny runs the 搂8.1 pipeline which resets accepted
+    /// (Step 3) and passes non-const CtEvent<T>& to handlers/filters (搂5.2).
     virtual void* payloadPtr() noexcept = 0;
 
 protected:
-    std::weak_ptr<CtReceiver> m_target;      ///< null = broadcast (§8.2)
+    std::weak_ptr<CtReceiver> m_target;      ///< null = broadcast (搂8.2)
     bool m_isBroadcast = false;              ///< fixed at construction (Rev 6, P1-1)
-    uint64_t m_priority = 0;                 ///< event priority hint (§10.3)
-    uint64_t m_sequence = 0;                 ///< enqueue-order sequence (Rev 8, P2-1: stamped at push, §7.10)
+    uint64_t m_priority = 0;                 ///< event priority hint (搂10.3)
+    uint64_t m_sequence = 0;                 ///< enqueue-order sequence (Rev 8, P2-1: stamped at push, 搂7.10)
 };
 } // namespace crisp::event
 
@@ -760,8 +544,8 @@ namespace crisp::event::detail {
 /// types (CtQueueBase, CtEventSource) cannot depend on a concrete EventSet,
 /// so pushAny carries this abstract holder. The concrete templated
 /// CtQueue<EventSet> static_casts to its own CtAnyEventHolder<EventSet>
-/// AFTER a payloadTypeKey() assert (never otherwise — same discipline as
-/// §6.5 erased handlers).
+/// AFTER a payloadTypeKey() assert (never otherwise 鈥?same discipline as
+/// 搂6.5 erased handlers).
 class CtAnyEventBase {
 public:
     virtual ~CtAnyEventBase() = default;
@@ -770,7 +554,7 @@ public:
     virtual uint64_t payloadTypeKey() const noexcept = 0;
 
     /// Identity of the EventSet that CREATED this holder (Rev 7, P2-5:
-    /// address-derived, §6.1 — the SAME scheme as payload type keys). Two
+    /// address-derived, 搂6.1 鈥?the SAME scheme as payload type keys). Two
     /// sets that share payload type T have different identities; a
     /// payloadTypeKey() check alone cannot detect a cross-set cast when T is
     /// shared (the static_cast would be UB). pushAny asserts
@@ -781,17 +565,17 @@ public:
     /// static_casts to `CtAnyEventHolder<EventSet>::any_event` after assert.
     /// (Rev 11, P2-2 + Rev 12, P1-1) NON-const return AND non-const member
     /// function: the dispatch pipeline mutates the event (accepted reset,
-    /// §8.1 Step 3) and handlers/filters take a non-const CtEvent<T>& (§5.2).
+    /// 搂8.1 Step 3) and handlers/filters take a non-const CtEvent<T>& (搂5.2).
     /// A const member function returning void* from a const this would
-    /// discard const on &m_value — compile error.
+    /// discard const on &m_value 鈥?compile error.
     virtual void* payloadPtr() noexcept = 0;
 };
 
 /// Concrete holder: owns a CtAnyEvent (variant) through the ONE heap
 /// allocation made at the async-path boundary (post / event source
 /// injection). `pushAny(std::unique_ptr<CtAnyEventBase>, ...)` transfers
-/// ownership to the queue. Async-path-only allocation — the sync dispatch
-/// hot path never constructs one (§10.1 契约 #5, §11 预算).
+/// ownership to the queue. Async-path-only allocation 鈥?the sync dispatch
+/// hot path never constructs one (搂10.1 濂戠害 #5, 搂11 棰勭畻).
 template <typename EventSet>
 class CtAnyEventHolder final : public CtAnyEventBase {
 public:
@@ -803,14 +587,14 @@ public:
 
     uint64_t payloadTypeKey() const noexcept override;   ///< CtTypeKey<T> of payload
 
-    /// Address-derived identity of EventSet (Rev 7, P2-5; §6.1 scheme).
+    /// Address-derived identity of EventSet (Rev 7, P2-5; 搂6.1 scheme).
     uint64_t eventSetId() const noexcept override;
 
     void* payloadPtr() noexcept override { return &m_value; }  ///< (Rev 11, P2-2 + Rev 12, P1-1) non-const member fn
 
     /// Access the held variant (concrete EventSet known at this site).
     /// (Rev 6, P2-2) const and non-const accessors: CtQueue<EventSet>::pushAny
-    /// must MOVE the variant into a CtPendingEvent — a const& cannot move.
+    /// must MOVE the variant into a CtPendingEvent 鈥?a const& cannot move.
     const any_event& value() const noexcept { return m_value; }
     any_event& value() noexcept { return m_value; }
 
@@ -820,21 +604,16 @@ private:
 } // namespace crisp::event::detail
 ```
 
-> **编码子agent 注意**：`CtPendingEventBase` 是**公开类型**（§7.10 契约 #7，供 `CtQueueBase::front` 与 `CtDispatcherBase::dispatchAny` 使用，落点 `ct_queue.h`）；`detail::CtAnyEventBase`（非模板接口）/`detail::CtAnyEventHolder<EventSet>`（具体持有者）是**实现细节**（落点 `ct_queue.h` 或 `ct_dispatcher.h`，可随 M2 实现自由调整），两者都**不进入 §5.3 的公开文件布局**——布局只列公开接口文件，detail 类型随宿主头。`CtQueueBase::pushAny` 与 `CtDispatcherBase::dispatchAny` 的签名以本节 + §7.8/§7.10 为准。**抽象类型不得按值进出边界**（Rev 5, P1-1 根因：`std::optional<抽象基类>` 不可编译）——边界一律引用/指针语义。**边界上的模板实参必须显式**：`CtQueueBase::pushAny` 收 `std::unique_ptr<detail::CtAnyEventBase>`（非模板接口），`CtQueue<EventSet>::pushAny` 键断言后 `static_cast` 到 `CtAnyEventHolder<EventSet>`（Rev 5, N-3）。
-
+> **缂栫爜瀛恆gent 娉ㄦ剰**锛歚CtPendingEventBase` 鏄?*鍏紑绫诲瀷**锛埪?.10 濂戠害 #7锛屼緵 `CtQueueBase::front` 涓?`CtDispatcherBase::dispatchAny` 浣跨敤锛岃惤鐐?`ct_queue.h`锛夛紱`detail::CtAnyEventBase`锛堥潪妯℃澘鎺ュ彛锛?`detail::CtAnyEventHolder<EventSet>`锛堝叿浣撴寔鏈夎€咃級鏄?*瀹炵幇缁嗚妭**锛堣惤鐐?`ct_queue.h` 鎴?`ct_dispatcher.h`锛屽彲闅?M2 瀹炵幇鑷敱璋冩暣锛夛紝涓よ€呴兘**涓嶈繘鍏?搂5.3 鐨勫叕寮€鏂囦欢甯冨眬**鈥斺€斿竷灞€鍙垪鍏紑鎺ュ彛鏂囦欢锛宒etail 绫诲瀷闅忓涓诲ご銆俙CtQueueBase::pushAny` 涓?`CtDispatcherBase::dispatchAny` 鐨勭鍚嶄互鏈妭 + 搂7.8/搂7.10 涓哄噯銆?*鎶借薄绫诲瀷涓嶅緱鎸夊€艰繘鍑鸿竟鐣?*锛圧ev 5, P1-1 鏍瑰洜锛歚std::optional<鎶借薄鍩虹被>` 涓嶅彲缂栬瘧锛夆€斺€旇竟鐣屼竴寰嬪紩鐢?鎸囬拡璇箟銆?*杈圭晫涓婄殑妯℃澘瀹炲弬蹇呴』鏄惧紡**锛歚CtQueueBase::pushAny` 鏀?`std::unique_ptr<detail::CtAnyEventBase>`锛堥潪妯℃澘鎺ュ彛锛夛紝`CtQueue<EventSet>::pushAny` 閿柇瑷€鍚?`static_cast` 鍒?`CtAnyEventHolder<EventSet>`锛圧ev 5, N-3锛夈€?
 ---
 
-## 7. 接口规范（Interfaces）
+## 7. 鎺ュ彛瑙勮寖锛圛nterfaces锛?
+鏈妭缁欐瘡涓叕寮€绫诲瀷**绮剧‘鐨?C++ 鎺ュ彛绛惧悕**鈥斺€旂紪鐮佸瓙agent 鐓ф瀹炵幇鍗冲彲锛屾棤闇€鐚滄祴銆備笌 搂6 鐨勫垎宸ワ細搂6 璁叉満鍒朵笌涓嶅彉閲忥紙**涓轰粈涔?*锛夛紝鏈妭缁欏ご鏂囦欢绾у埆鐨勫畬鏁?API锛?*鏄粈涔?*锛夈€傛墍鏈夌鍚嶉伒瀹?`AGENTS.md` / `docs/style-guide.md`锛歚Ct` 鍓嶇紑銆乣k` 鍓嶇紑銆乣m_` 鍓嶇紑銆乣lowerCamelCase()`銆佸嚱鏁颁綋 鈮?60 琛屻€佸叕寮€ API 鐢ㄨ嫳鏂?Doxygen 娉ㄩ噴銆丆++17銆佹棤瑁?`new`/`delete`銆佹棤 C 椋庢牸 cast锛堝敮涓€鐨?`reinterpret_cast` 璞佸厤宸插湪 搂6.1 澹版槑锛夈€?
+姣忓皬鑺傜粨鏋勫浐瀹氾細**鑱岃矗**锛堜竴鍙ワ級鈫?**澶存枃浠?* 鈫?**绮剧‘绛惧悕**锛堜唬鐮佸潡锛夆啋 **璇箟濂戠害**锛堣涓恒€佸墠缃潯浠躲€佸悗缃潯浠躲€侀敊璇鐞嗭級鈫?**涓?v0 鐨勫樊寮?*銆傛帴鍙ｆ寜 搂5.3 鏂囦欢甯冨眬褰掍綅锛沗crisp::event::detail` 鍐呭涓嶅湪姝ゆ壙璇鸿寖鍥村唴锛岄殢鏃跺彲鏀广€?*鏈妭涓?搂6 閲嶅澶勫彧寮曠敤涓嶉噸鎶?*锛涘啿绐佷互鏈妭涓哄噯銆?
+### 7.1 CtTypeKey<T>锛坈t_type_key.h锛屾柊澧烇級
 
-本节给每个公开类型**精确的 C++ 接口签名**——编码子agent 照此实现即可，无需猜测。与 §6 的分工：§6 讲机制与不变量（**为什么**），本节给头文件级别的完整 API（**是什么**）。所有签名遵守 `AGENTS.md` / `docs/style-guide.md`：`Ct` 前缀、`k` 前缀、`m_` 前缀、`lowerCamelCase()`、函数体 ≤ 60 行、公开 API 用英文 Doxygen 注释、C++17、无裸 `new`/`delete`、无 C 风格 cast（唯一的 `reinterpret_cast` 豁免已在 §6.1 声明）。
-
-每小节结构固定：**职责**（一句）→ **头文件** → **精确签名**（代码块）→ **语义契约**（行为、前置条件、后置条件、错误处理）→ **与 v0 的差异**。接口按 §5.3 文件布局归位；`crisp::event::detail` 内容不在此承诺范围内，随时可改。**本节与 §6 重复处只引用不重抄**；冲突以本节为准。
-
-### 7.1 CtTypeKey<T>（ct_type_key.h，新增）
-
-**职责**：编译期类型 → `uint64_t` 唯一键映射，用于分发表索引与 trace 记录。
-
-**精确签名**（机制见 §6.1）：
+**鑱岃矗**锛氱紪璇戞湡绫诲瀷 鈫?`uint64_t` 鍞竴閿槧灏勶紝鐢ㄤ簬鍒嗗彂琛ㄧ储寮曚笌 trace 璁板綍銆?
+**绮剧‘绛惧悕**锛堟満鍒惰 搂6.1锛夛細
 
 ```cpp
 // ct_type_key.h
@@ -845,7 +624,7 @@ private:
 namespace crisp::event::detail {
 
 /// FNV-1a 64-bit hash, kept ONLY for debug/diagnostic name hashing.
-/// NOT used for type identity — see CtTypeKey. Moved here from v0's
+/// NOT used for type identity 鈥?see CtTypeKey. Moved here from v0's
 /// ct_event.h so no public header depends on a hashing function.
 constexpr uint64_t fnv1a(const char* s,
                          uint64_t seed = 14695981039346656037ull) noexcept;
@@ -874,24 +653,15 @@ struct CtTypeKey {
 } // namespace crisp::event
 ```
 
-**语义契约**：
-
-1. **键即地址**：`value()` 返回 `reinterpret_cast<value_type>(&s_anchor)`。C++17 `inline` 静态数据成员保证跨 TU 同一实体（ODR），因此同一 `T` 在任意 TU 中键相同；不同 `T` 的键不同（不同类型 ⇒ 不同对象 ⇒ 不同地址）。键零碰撞是**设计承诺**，非概率性。
-2. **作为 `uint64_t` 使用**：键直接参与 `std::unordered_map<uint64_t, ...>` 查找（§6.5）与 trace 记录，**不做二次哈希**。32 位 MinGW 上指针提升到 64 位后仍唯一；键只用于进程内身份，不做持久化/跨进程序列化（M4 前）。
-3. **fnv1a 降级到 `detail`**：v0 用 `fnv1a(CtEventTraits<T>::name)` 作身份键（会碰撞），现仅保留为调试辅助；**任何表查找、任何身份比较都不得使用 fnv1a**。编码子agent 若在公开头看到 fnv1a 依赖即视为违规。
-4. **性能**：`value()` 读取静态地址，编译器内联为常量加载；热路径零开销。调试可读性由 `CtEventTraits<T>::name` 提供，键只做机器身份。
-5. **线程安全**：`value()` 无状态、无锁，任意线程可调用。
-
-**与 v0 的差异**：v0 的 `typeKey<T>()`（fnv1a 于 name）**移除**，收敛为 `CtTypeKey<T>::value()`；`fnv1a` 迁入 `detail`。v0 中依赖 `typeKey<T>()` 的测试改用 `CtTypeKey<T>::value()`（§13 测试计划同步更新）。
-
-### 7.2 CtEventTraits 强制（ct_event.h，保留+修改）
-
-**职责**：载荷类型 `T` 的编译期元数据（`kIsValid`、`name`）；**未特化 = 编译失败**。
-
-**精确签名**（机制见 §6.2）：
+**璇箟濂戠害**锛?
+1. **閿嵆鍦板潃**锛歚value()` 杩斿洖 `reinterpret_cast<value_type>(&s_anchor)`銆侰++17 `inline` 闈欐€佹暟鎹垚鍛樹繚璇佽法 TU 鍚屼竴瀹炰綋锛圤DR锛夛紝鍥犳鍚屼竴 `T` 鍦ㄤ换鎰?TU 涓敭鐩稿悓锛涗笉鍚?`T` 鐨勯敭涓嶅悓锛堜笉鍚岀被鍨?鈬?涓嶅悓瀵硅薄 鈬?涓嶅悓鍦板潃锛夈€傞敭闆剁鎾炴槸**璁捐鎵胯**锛岄潪姒傜巼鎬с€?2. **浣滀负 `uint64_t` 浣跨敤**锛氶敭鐩存帴鍙備笌 `std::unordered_map<uint64_t, ...>` 鏌ユ壘锛埪?.5锛変笌 trace 璁板綍锛?*涓嶅仛浜屾鍝堝笇**銆?2 浣?MinGW 涓婃寚閽堟彁鍗囧埌 64 浣嶅悗浠嶅敮涓€锛涢敭鍙敤浜庤繘绋嬪唴韬唤锛屼笉鍋氭寔涔呭寲/璺ㄨ繘绋嬪簭鍒楀寲锛圡4 鍓嶏級銆?3. **fnv1a 闄嶇骇鍒?`detail`**锛歷0 鐢?`fnv1a(CtEventTraits<T>::name)` 浣滆韩浠介敭锛堜細纰版挒锛夛紝鐜颁粎淇濈暀涓鸿皟璇曡緟鍔╋紱**浠讳綍琛ㄦ煡鎵俱€佷换浣曡韩浠芥瘮杈冮兘涓嶅緱浣跨敤 fnv1a**銆傜紪鐮佸瓙agent 鑻ュ湪鍏紑澶寸湅鍒?fnv1a 渚濊禆鍗宠涓鸿繚瑙勩€?4. **鎬ц兘**锛歚value()` 璇诲彇闈欐€佸湴鍧€锛岀紪璇戝櫒鍐呰仈涓哄父閲忓姞杞斤紱鐑矾寰勯浂寮€閿€銆傝皟璇曞彲璇绘€х敱 `CtEventTraits<T>::name` 鎻愪緵锛岄敭鍙仛鏈哄櫒韬唤銆?5. **绾跨▼瀹夊叏**锛歚value()` 鏃犵姸鎬併€佹棤閿侊紝浠绘剰绾跨▼鍙皟鐢ㄣ€?
+**涓?v0 鐨勫樊寮?*锛歷0 鐨?`typeKey<T>()`锛坒nv1a 浜?name锛?*绉婚櫎**锛屾敹鏁涗负 `CtTypeKey<T>::value()`锛沗fnv1a` 杩佸叆 `detail`銆倂0 涓緷璧?`typeKey<T>()` 鐨勬祴璇曟敼鐢?`CtTypeKey<T>::value()`锛埪?3 娴嬭瘯璁″垝鍚屾鏇存柊锛夈€?
+### 7.2 CtEventTraits 寮哄埗锛坈t_event.h锛屼繚鐣?淇敼锛?
+**鑱岃矗**锛氳浇鑽风被鍨?`T` 鐨勭紪璇戞湡鍏冩暟鎹紙`kIsValid`銆乣name`锛夛紱**鏈壒鍖?= 缂栬瘧澶辫触**銆?
+**绮剧‘绛惧悕**锛堟満鍒惰 搂6.2锛夛細
 
 ```cpp
-// ct_event.h（节选）
+// ct_event.h锛堣妭閫夛級
 #pragma once
 #include <string_view>
 #include <type_traits>
@@ -899,7 +669,7 @@ struct CtTypeKey {
 namespace crisp::event {
 
 /// Compile-time metadata for payload type T.
-/// The primary template is intentionally INVALID — every payload type MUST
+/// The primary template is intentionally INVALID 鈥?every payload type MUST
 /// specialize it via CRISP_EVENT_TYPE. Forgetting is a compile error, not a runtime surprise.
 template <typename T>
 struct CtEventTraits {
@@ -910,7 +680,7 @@ struct CtEventTraits {
 } // namespace crisp::event
 
 /// Macro that expands to a specialization of CtEventTraits.
-/// Plain preprocessor expansion of a template specialization — NOT code
+/// Plain preprocessor expansion of a template specialization 鈥?NOT code
 /// generation (no moc, no qmake, no reflection). Call at file scope,
 /// outside any namespace.
 #define CRISP_EVENT_TYPE(TYPE, NAME)                                   \
@@ -925,26 +695,16 @@ struct CtEventTraits {
     }
 ```
 
-**语义契约**：
-
-1. **强制点落位**（§6.2 三处 static_assert 的接口层落点）：
-   - `CtEvent<T>` 类体内：`static_assert(CtEventTraits<T>::kIsValid, "CtEvent<T> requires CRISP_EVENT_TYPE(T, ...)")`；
-   - `CtDispatcher::addHandler<T>/send<T>/post<T>/postTo<T>` 内部：同一断言；
-   - `CtEventSet<Ts...>` 折叠展开：对每个 `Ts` 断言（§7.4）。
-2. **name 要求**：`NAME` 必须是字符串字面量，仅作 trace 的人类可读标签；**不参与类型身份**（身份是 `CtTypeKey<T>::value()`）。两个类型共享 name 合法但不推荐（避免 trace 混淆）。
-3. **特化位置**：`CRISP_EVENT_TYPE` 只能在文件作用域（命名空间外）调用；同一 `TYPE` 全项目只允许一个特化——重复特化触发 ODR 链接错误，这是**期望行为**（防止重复定义）。
-4. **宏不是代码生成**：展开产物是普通模板特化，编译期可验证；无 moc、无反射、无 qmake。
-
-**与 v0 的差异**：v0 主模板有默认 `name = "CtEvent"` 且特化可选（未特化可用但键碰撞）；现在未特化直接编译失败（`kIsValid == false`）。
-
-### 7.3 CtEvent<T> 修改点（ct_event.h，保留+修改）
-
-**职责**：类型化事件值对象——携带载荷 `T`、时间戳、优先级与来源（origin）。
-
-**精确签名**（v0 保留项不动，仅列修改点与新语义；完整签名以最终头文件为准）：
+**璇箟濂戠害**锛?
+1. **寮哄埗鐐硅惤浣?*锛埪?.2 涓夊 static_assert 鐨勬帴鍙ｅ眰钀界偣锛夛細
+   - `CtEvent<T>` 绫讳綋鍐咃細`static_assert(CtEventTraits<T>::kIsValid, "CtEvent<T> requires CRISP_EVENT_TYPE(T, ...)")`锛?   - `CtDispatcher::addHandler<T>/send<T>/post<T>/postTo<T>` 鍐呴儴锛氬悓涓€鏂█锛?   - `CtEventSet<Ts...>` 鎶樺彔灞曞紑锛氬姣忎釜 `Ts` 鏂█锛埪?.4锛夈€?2. **name 瑕佹眰**锛歚NAME` 蹇呴』鏄瓧绗︿覆瀛楅潰閲忥紝浠呬綔 trace 鐨勪汉绫诲彲璇绘爣绛撅紱**涓嶅弬涓庣被鍨嬭韩浠?*锛堣韩浠芥槸 `CtTypeKey<T>::value()`锛夈€備袱涓被鍨嬪叡浜?name 鍚堟硶浣嗕笉鎺ㄨ崘锛堥伩鍏?trace 娣锋穯锛夈€?3. **鐗瑰寲浣嶇疆**锛歚CRISP_EVENT_TYPE` 鍙兘鍦ㄦ枃浠朵綔鐢ㄥ煙锛堝懡鍚嶇┖闂村锛夎皟鐢紱鍚屼竴 `TYPE` 鍏ㄩ」鐩彧鍏佽涓€涓壒鍖栤€斺€旈噸澶嶇壒鍖栬Е鍙?ODR 閾炬帴閿欒锛岃繖鏄?*鏈熸湜琛屼负**锛堥槻姝㈤噸澶嶅畾涔夛級銆?4. **瀹忎笉鏄唬鐮佺敓鎴?*锛氬睍寮€浜х墿鏄櫘閫氭ā鏉跨壒鍖栵紝缂栬瘧鏈熷彲楠岃瘉锛涙棤 moc銆佹棤鍙嶅皠銆佹棤 qmake銆?
+**涓?v0 鐨勫樊寮?*锛歷0 涓绘ā鏉挎湁榛樿 `name = "CtEvent"` 涓旂壒鍖栧彲閫夛紙鏈壒鍖栧彲鐢ㄤ絾閿鎾烇級锛涚幇鍦ㄦ湭鐗瑰寲鐩存帴缂栬瘧澶辫触锛坄kIsValid == false`锛夈€?
+### 7.3 CtEvent<T> 淇敼鐐癸紙ct_event.h锛屼繚鐣?淇敼锛?
+**鑱岃矗**锛氱被鍨嬪寲浜嬩欢鍊煎璞♀€斺€旀惡甯﹁浇鑽?`T`銆佹椂闂存埑銆佷紭鍏堢骇涓庢潵婧愶紙origin锛夈€?
+**绮剧‘绛惧悕**锛坴0 淇濈暀椤逛笉鍔紝浠呭垪淇敼鐐逛笌鏂拌涔夛紱瀹屾暣绛惧悕浠ユ渶缁堝ご鏂囦欢涓哄噯锛夛細
 
 ```cpp
-// ct_event.h（节选：修改点）
+// ct_event.h锛堣妭閫夛細淇敼鐐癸級
 #pragma once
 #include <cstdint>
 #include <string_view>
@@ -954,7 +714,7 @@ struct CtEventTraits {
 namespace crisp::event {
 
 /// Lifecycle phases of an event during its journey through the system.
-/// (Rev 7, P1-3) Lives in ct_event.h — BOTH ct_dispatch_context.h and
+/// (Rev 7, P1-3) Lives in ct_event.h 鈥?BOTH ct_dispatch_context.h and
 /// ct_trace.h need it; moving it here keeps the include graph acyclic
 /// (ct_dispatch_context.h must NOT include ct_trace.h, and vice versa).
 /// v0 had 4 phases; we add the asynchronous phases kQueued/kDropped.
@@ -963,20 +723,20 @@ enum class CtTracePhase : uint8_t {
     kFiltered,   ///< event was intercepted by a filter (kFiltered result)
     kDelivered,  ///< event reached a receiver handler
     kObserved,   ///< observer callback fired
-    kQueued,     ///< event accepted into a CtQueue (async path, §10)
-    kDropped,    ///< event dropped by queue overflow / expired receiver (§10)
+    kQueued,     ///< event accepted into a CtQueue (async path, 搂10)
+    kDropped,    ///< event dropped by queue overflow / expired receiver (搂10)
 };
 
 /// Where an event originated. Renamed from v0's `enum class CtEventSource`
 /// so that the name CtEventSource is free for the abstract platform source
-/// interface (see ct_event_source.h, §7.12).
+/// interface (see ct_event_source.h, 搂7.12).
 enum class CtEventOrigin {
     kSystem,        ///< produced by the framework/platform layer (timers, io...)
     kApplication,   ///< produced by application code
 };
 
 /// Type-safe event value. Payload immutable after construction; the
-/// dispatch state (accepted) is MUTABLE during delivery (§8.1 Step 6);
+/// dispatch state (accepted) is MUTABLE during delivery (搂8.1 Step 6);
 /// value semantics.
 /// The payload T must have a specialized CtEventTraits (compile-time).
 template <typename T>
@@ -1008,44 +768,44 @@ public:
     /// The origin of the event (renamed from `source`).
     CtEventOrigin origin() const noexcept;
 
-    /// Monotonic sequence number assigned at dispatch time (see §8.2).
+    /// Monotonic sequence number assigned at dispatch time (see 搂8.2).
     uint64_t sequence() const noexcept;
 
-    /// Optional user-defined ordering hint; 0 means "no hint" (see §10.3).
+    /// Optional user-defined ordering hint; 0 means "no hint" (see 搂10.3).
     uint64_t priority() const noexcept;
 
     /// Set the ordering hint BEFORE posting/sending (Rev 6, P2-1: the
     /// constructors forward only to T's payload ctor, so a public setter is
-    /// the application-facing way to produce a non-zero priority that §10.3
+    /// the application-facing way to produce a non-zero priority that 搂10.3
     /// queue ordering can act on. Must be called before dispatch/queue push;
     /// the dispatcher/queue stamp it into CtPendingEvent at push time).
     void setPriority(uint64_t prio) noexcept { m_priority = prio; }
 
-    /// Mark the event as accepted (consumed) — called by a handler during
-    /// delivery (§8.1 Step 6). v0 API preserved (§7.3 契约 #6, Rev 2 P2-8).
+    /// Mark the event as accepted (consumed) 鈥?called by a handler during
+    /// delivery (搂8.1 Step 6). v0 API preserved (搂7.3 濂戠害 #6, Rev 2 P2-8).
     void accept();
 
-    /// Mark the event as not accepted — v0 API preserved.
+    /// Mark the event as not accepted 鈥?v0 API preserved.
     void ignore();
 
-    /// The accepted flag (v0 kept as a PUBLIC member — see 契约 #6).
+    /// The accepted flag (v0 kept as a PUBLIC member 鈥?see 濂戠害 #6).
     bool accepted = false;
 
 private:
-    // (Rev 5, P2-2 / Rev 6, P2-1 / Rev 7, P1-1) §8.1/§8.2 Step 3's
+    // (Rev 5, P2-2 / Rev 6, P2-1 / Rev 7, P1-1) 搂8.1/搂8.2 Step 3's
     // event.setSequence(...) executes inside CtDispatcher<EventSet>::send/
-    // broadcast — a TEMPLATE DERIVED class. C++ friendship does NOT inherit:
+    // broadcast 鈥?a TEMPLATE DERIVED class. C++ friendship does NOT inherit:
     // CtDispatcherBase being a friend does NOT extend to CtDispatcher<EventSet>,
     // so the templated dispatcher MUST be a friend too. CtQueue's push path
     // also stamps sequence into the pending event. setPriority is PUBLIC
-    // (Rev 6, P2-1) — priority is an application-facing event attribute;
+    // (Rev 6, P2-1) 鈥?priority is an application-facing event attribute;
     // only setSequence stays private (the producer must never forge a
     // sequence number).
     friend class CtDispatcherBase;
     template <typename> friend class CtDispatcher;
     template <typename> friend class CtQueue;
 
-    /// Assign the dispatch sequence number (dispatcher/queue only; §8.2).
+    /// Assign the dispatch sequence number (dispatcher/queue only; 搂8.2).
     void setSequence(uint64_t seq) noexcept { m_sequence = seq; }
 
     T m_payload;              ///< value semantics, no heap allocation
@@ -1058,29 +818,20 @@ private:
 enum class CtDispatchResult {
     kHandled,       ///< at least one handler invoked
     kUnhandled,     ///< no handler matched
-    kFiltered,      ///< a filter intercepted the event (§8.1 Step 5)
+    kFiltered,      ///< a filter intercepted the event (搂8.1 Step 5)
     kNoReceiver,    ///< broadcast found no live receiver (informational)
 };
 
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **source 鈫?origin 鏀瑰悕**锛埪?.4 鐨勮惤鍦帮級锛歚CtEventOrigin` 鏋氫妇鍙栦唬 v0 鐨?`CtEventSource`锛沗CtEvent::source()` 鏀瑰悕 `origin()`銆?*`CtEventSource` 鍚嶅瓧鏈増鏈唴涓嶅緱鍐嶄綔浠讳綍鍚箟浣跨敤**鈥斺€斿畠棰勭暀缁?搂7.12 鐨勬娊璞″钩鍙版簮鎺ュ彛銆傛墍鏈?v0 璋冪敤鐐逛笌娴嬭瘯鍚屾鏀瑰悕銆?2. **鍊艰涔?*锛歚CtEvent<T>` 鍦ㄦ爤涓?闃熷垪涓寜鍊煎瓨鍌紝鏋愭瀯鏃犲爢閲婃斁锛沗T` 鑷韩鍙惈 `std::string` 绛夛紙闈炵儹璺緞浜嬩欢鍏佽锛夛紝浣?*鐑矾寰勮浇鑽?*搴斾负 POD/灏忓璞★紙搂11 绾︽潫锛夈€?3. **涓嶅彲鍙樺绾︾殑杈圭晫锛圧ev 2, P2-8 婢勬竻锛?*锛?*杞借嵎** `payload()` 杩斿洖 `const T&`锛屾棤淇敼鍣紝鏋勯€犲悗涓嶅彲鍙橈紱`accepted` 鏄?*鍒嗗彂鐘舵€?*锛屽湪鍒嗗彂鏈燂紙搂8.1 Step 6 / 搂8.2 Step 6 鐨?handler 鍥炶皟鍐咃級**鍙彉**鈥斺€?浜嬩欢涓嶅彲鍙?鎸囪浇鑽蜂笌 origin/sequence/priority锛?*涓嶅惈 accepted**銆俙sequence`/`priority` 璇箟瑙?搂8.2/搂10.3銆?4. **鏋勯€犻噸杞?*锛歚explicit CtEvent(CtEventOrigin, Args&&...)` 涓?`explicit CtEvent(Args&&...)`锛堥粯璁?`kApplication`锛変簩閫変竴锛屽潎杞彂缁?`T` 鐨勬瀯閫犲嚱鏁帮紱绂佹榛樿鏋勯€狅紙浜嬩欢蹇呴』鎼哄甫杞借嵎锛夈€?5. **`CtDispatchResult`**锛歚send`/`broadcast` 杩斿洖鍊硷紱`kNoReceiver` 鏄俊鎭€х姸鎬侊紙骞挎挱鏈懡涓瓨娲绘帴鏀惰€咃級锛屼笉鏄敊璇€斺€旈敊璇敱 `CtEventError`锛埪?.13锛夎〃杈俱€偮?.1/搂8.2 鐢ㄥ埌鐨?`kFiltered` 鍦ㄦ涓€骞跺０鏄庛€?6. **`accepted` 涓?`accept()/ignore()` 淇濈暀锛圧ev 2, P2-8锛?*锛歷0 鐨勫叕鏈夋垚鍛?`bool accepted`锛堥粯璁?`false`锛変笌鎴愬憳鍑芥暟 `accept()/ignore()` **鍘熸牱淇濈暀**鈥斺€斿畠浠 搂8.1 Step 6 / 搂8.2 Step 6 鐨勫垎鍙戣涔変緷璧栵紙棣栦釜 accept 鍋滄 send 鐨勫悗缁姇閫掞紱broadcast 鍙?OR锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛歚accepted` 淇濇寔 public 浠ヤ笌 v0 鍏煎锛坔andler 鍙鍙啓锛夛紝`accept()/ignore()` 鏄帹鑽愬啓娉曪紱鍒嗗彂鍏ュ彛灏?`accepted` 澶嶄綅涓?`false`锛埪?.1 Step 3锛夈€?
+**涓?v0 鐨勫樊寮?*锛氫粎 `source`鈫抈origin` 鏀瑰悕涓?`CtEventSource` 鏀瑰悕锛沗CtEvent<T>` 鍏朵綑鍏紑褰㈡€侊紙`payload()`銆佸€艰涔夈€乣accepted/accept/ignore`锛変繚鐣欎笉鍔紝閬垮厤鏃犺皳 churn銆?
+### 7.4 CtEventSet<Ts...> 涓?CtAnyEvent锛坈t_event_set.h锛屾柊澧烇級
 
-1. **source → origin 改名**（§5.4 的落地）：`CtEventOrigin` 枚举取代 v0 的 `CtEventSource`；`CtEvent::source()` 改名 `origin()`。**`CtEventSource` 名字本版本内不得再作任何含义使用**——它预留给 §7.12 的抽象平台源接口。所有 v0 调用点与测试同步改名。
-2. **值语义**：`CtEvent<T>` 在栈上/队列中按值存储，析构无堆释放；`T` 自身可含 `std::string` 等（非热路径事件允许），但**热路径载荷**应为 POD/小对象（§11 约束）。
-3. **不可变契约的边界（Rev 2, P2-8 澄清）**：**载荷** `payload()` 返回 `const T&`，无修改器，构造后不可变；`accepted` 是**分发状态**，在分发期（§8.1 Step 6 / §8.2 Step 6 的 handler 回调内）**可变**——"事件不可变"指载荷与 origin/sequence/priority，**不含 accepted**。`sequence`/`priority` 语义见 §8.2/§10.3。
-4. **构造重载**：`explicit CtEvent(CtEventOrigin, Args&&...)` 与 `explicit CtEvent(Args&&...)`（默认 `kApplication`）二选一，均转发给 `T` 的构造函数；禁止默认构造（事件必须携带载荷）。
-5. **`CtDispatchResult`**：`send`/`broadcast` 返回值；`kNoReceiver` 是信息性状态（广播未命中存活接收者），不是错误——错误由 `CtEventError`（§7.13）表达。§8.1/§8.2 用到的 `kFiltered` 在此一并声明。
-6. **`accepted` 与 `accept()/ignore()` 保留（Rev 2, P2-8）**：v0 的公有成员 `bool accepted`（默认 `false`）与成员函数 `accept()/ignore()` **原样保留**——它们被 §8.1 Step 6 / §8.2 Step 6 的分发语义依赖（首个 accept 停止 send 的后续投递；broadcast 取 OR）。**编码子agent 注意**：`accepted` 保持 public 以与 v0 兼容（handler 可读可写），`accept()/ignore()` 是推荐写法；分发入口将 `accepted` 复位为 `false`（§8.1 Step 3）。
-
-**与 v0 的差异**：仅 `source`→`origin` 改名与 `CtEventSource` 改名；`CtEvent<T>` 其余公开形态（`payload()`、值语义、`accepted/accept/ignore`）保留不动，避免无谓 churn。
-
-### 7.4 CtEventSet<Ts...> 与 CtAnyEvent（ct_event_set.h，新增）
-
-**职责**：编译期闭合的事件载荷类型集合，提供异构存储（`any_type`）与类型安全访问。
-
-**精确签名**（机制见 §6.3）：
+**鑱岃矗**锛氱紪璇戞湡闂悎鐨勪簨浠惰浇鑽风被鍨嬮泦鍚堬紝鎻愪緵寮傛瀯瀛樺偍锛坄any_type`锛変笌绫诲瀷瀹夊叏璁块棶銆?
+**绮剧‘绛惧悕**锛堟満鍒惰 搂6.3锛夛細
 
 ```cpp
 // ct_event_set.h
@@ -1115,8 +866,7 @@ struct CtEventSet {
 private:
     template <typename... Us>
     static constexpr bool allDistinct() {
-        // 折叠展开：对每一对 (Ui, Uj) 检查 !std::is_same_v（细节实现，见 §6.3）
-        return true;
+        // 鎶樺彔灞曞紑锛氬姣忎竴瀵?(Ui, Uj) 妫€鏌?!std::is_same_v锛堢粏鑺傚疄鐜帮紝瑙?搂6.3锛?        return true;
     }
 };
 
@@ -1130,7 +880,7 @@ template <typename T, typename... Ts>
 CtEvent<T>* getIf(CtAnyEvent<Ts...>& any) noexcept;
 
 /// Exhaustive visitor helper: calls `fn` for whichever event the variant
-/// currently holds. Same semantics as std::visit — this exists only as a
+/// currently holds. Same semantics as std::visit 鈥?this exists only as a
 /// convenience with a crisper name for dispatcher internals.
 template <typename Visitor, typename... Ts>
 decltype(auto) visitEvent(Visitor&& fn, CtAnyEvent<Ts...>& any);
@@ -1140,36 +890,26 @@ decltype(auto) visitEvent(Visitor&& fn, const CtAnyEvent<Ts...>& any);
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **闂悎闆嗗悎**锛歚CtDispatcher<CtEventSet<Ts...>>`锛埪?.8锛夌殑绫诲瀷鍩熷嵆 `Ts...`锛沗send<T>`/`addHandler<T>` 瑕佹眰 `T 鈭?{Ts...}`锛坄static_assert(CtEventSet::contains<T>)`锛夈€?*鍙栬垗**锛氶泦鍚堥棴鍚?鈬?涓€涓?dispatcher 鏃犳硶浜嬪悗鎺ョ撼鏂颁簨浠剁被鍨嬶紱闇€瑕佹墿灞曟椂锛坅锛夋墿澶ч泦鍚堥噸鏂板疄渚嬪寲 dispatcher锛屾垨锛坆锛夊簲鐢ㄥ眰鍒嗗涓?dispatcher 骞舵寜鑱岃矗鍒嗗彂锛埪?.1 鍒嗗眰鍥撅級銆侻4 鐨?`CtOpaqueEvent` 閫冪敓鑸憋紙搂14锛夌紦瑙ｈ闄愬埗銆?2. **`any_type` 鍗?`std::variant`**锛氬€艰涔夈€佹爤/`deque` 瀛樺偍銆佹棤鍫嗗垎閰嶏紱`std::get_if<CtEvent<T>>` 杩斿洖瀹屾暣绫诲瀷鎸囬拡锛屽け璐ヨ繑鍥?`nullptr`锛堝紓绫诲瀷鏃讹級銆?*鍒嗗彂鍙彲鑳藉湪鍖归厤绫诲瀷涓婃垚鍔?*鈥斺€旈泦鍚堥潤鎬佹柇瑷€ + 閿柇瑷€锛埪?.2锛夊弻閲嶄繚璇侊紝鏉滅粷 v0 鐨?鍐?cast"銆?3. **`visitEvent`**锛氬唴閮ㄧ瓑浠?`std::visit`锛涙彁渚?const/闈?const 涓や釜閲嶈浇銆?*缂栫爜瀛恆gent 娉ㄦ剰**锛氬疄鐜板繀椤荤洿鎺ヨ皟鐢?`std::visit`锛屼笉寰楄嚜琛岄亶鍘?variant 鐨?`index()`锛堣嚜閬嶅巻鏄撴紡鍒嗘敮涓斾笌鏍囧噯搴撻噸澶嶏級銆?4. **`contains<T>`**锛氱紪璇戞湡鎴愬憳锛屼緵 dispatcher 鐨?`static_assert` 浣跨敤锛坄CtEventSet<Ts...>::contains<T>`锛夈€?5. **璺?TU 绋冲畾鎬?*锛氶泦鍚堢殑 `any_type` 鏄櫘閫氱被鍨嬪埆鍚嶏紝鏃?ODR 椋庨櫓锛涘悓涓€闆嗗悎鍦ㄥ涓?TU 瀹炰緥鍖栨槸鍚屼竴绫诲瀷锛坄CtEvent<Ts>...` 鐩稿悓 鈬?variant 鐩稿悓锛夈€?6. **EventSet 韬唤閿紙Rev 11, P3 娉ㄦ槑纭锛?*锛歚CtEventSet<Ts...>` 鑷韩鐨勫湴鍧€娲剧敓韬唤閿?= **`CtTypeKey<CtEventSet<Ts...>>::value()`**锛埪?.1 鏂规娉涚敤浜庝换浣曠被鍨嬶級鈥斺€擿eventSetId()`锛坄CtQueueBase`/`CtAnyEventHolder`/`CtPendingEventBase`锛屄?.5/搂7.10锛変笌婧?`injectEvent` 鐨勪笅杞瀷鏂█閮界敤瀹冦€傚疄鐜颁晶鐩存帴璋冪敤 `CtTypeKey<EventSet>::value()` 鍗冲彲銆?
+### 7.5 CtReceiver锛坈t_receiver.h锛屾柊澧烇級
 
-1. **闭合集合**：`CtDispatcher<CtEventSet<Ts...>>`（§7.8）的类型域即 `Ts...`；`send<T>`/`addHandler<T>` 要求 `T ∈ {Ts...}`（`static_assert(CtEventSet::contains<T>)`）。**取舍**：集合闭合 ⇒ 一个 dispatcher 无法事后接纳新事件类型；需要扩展时（a）扩大集合重新实例化 dispatcher，或（b）应用层分多个 dispatcher 并按职责分发（§4.1 分层图）。M4 的 `CtOpaqueEvent` 逃生舱（§14）缓解该限制。
-2. **`any_type` 即 `std::variant`**：值语义、栈/`deque` 存储、无堆分配；`std::get_if<CtEvent<T>>` 返回完整类型指针，失败返回 `nullptr`（异类型时）。**分发只可能在匹配类型上成功**——集合静态断言 + 键断言（§8.2）双重保证，杜绝 v0 的"再 cast"。
-3. **`visitEvent`**：内部等价 `std::visit`；提供 const/非 const 两个重载。**编码子agent 注意**：实现必须直接调用 `std::visit`，不得自行遍历 variant 的 `index()`（自遍历易漏分支且与标准库重复）。
-4. **`contains<T>`**：编译期成员，供 dispatcher 的 `static_assert` 使用（`CtEventSet<Ts...>::contains<T>`）。
-5. **跨 TU 稳定性**：集合的 `any_type` 是普通类型别名，无 ODR 风险；同一集合在多个 TU 实例化是同一类型（`CtEvent<Ts>...` 相同 ⇒ variant 相同）。
-6. **EventSet 身份键（Rev 11, P3 注明确认）**：`CtEventSet<Ts...>` 自身的地址派生身份键 = **`CtTypeKey<CtEventSet<Ts...>>::value()`**（§6.1 方案泛用于任何类型）——`eventSetId()`（`CtQueueBase`/`CtAnyEventHolder`/`CtPendingEventBase`，§6.5/§7.10）与源/`injectEvent` 的下转型断言都用它。实现侧直接调用 `CtTypeKey<EventSet>::value()` 即可。
-
-### 7.5 CtReceiver（ct_receiver.h，新增）
-
-**职责**：事件接收者的基类——唯一会被 `CtDispatcher` 直接寻址的对象。持有全局唯一 `objectId`、所属线程（`CtThreadAffinity`），并提供类型安全的 `bindHandler<T>` 注册入口。
-
-**精确签名**：
-
+**鑱岃矗**锛氫簨浠舵帴鏀惰€呯殑鍩虹被鈥斺€斿敮涓€浼氳 `CtDispatcher` 鐩存帴瀵诲潃鐨勫璞°€傛寔鏈夊叏灞€鍞竴 `objectId`銆佹墍灞炵嚎绋嬶紙`CtThreadAffinity`锛夛紝骞舵彁渚涚被鍨嬪畨鍏ㄧ殑 `bindHandler<T>` 娉ㄥ唽鍏ュ彛銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_receiver.h（新增）
+// ct_receiver.h锛堟柊澧烇級
 #pragma once
 #include <cstdint>
 #include <memory>
 #include <functional>
 #include "ct_event.h"
-#include "ct_handler_token.h"       // CtHandlerToken (§7.7; Rev 5, N-1: bindHandler returns it — self-contained)
-#include "ct_thread_affinity.h"     // §7.14（CtThreadAffinity）
-#include <vector>                   // (Rev 11, P2-1) m_dispatchers collection
+#include "ct_handler_token.h"       // CtHandlerToken (搂7.7; Rev 5, N-1: bindHandler returns it 鈥?self-contained)
+#include "ct_thread_affinity.h"     // 搂7.14锛圕tThreadAffinity锛?#include <vector>                   // (Rev 11, P2-1) m_dispatchers collection
 
-// (Rev 5, P1-4) NO #include "ct_dispatcher.h" here — that would create a
+// (Rev 5, P1-4) NO #include "ct_dispatcher.h" here 鈥?that would create a
 // circular dependency (ct_dispatcher.h includes ct_receiver.h). CtDispatcher
 // is forward-declared; bindHandler<T> only names it as a dependent parameter
-// type, resolved at template instantiation time (§7.5 契约 #5). ct_dispatcher.h
+// type, resolved at template instantiation time (搂7.5 濂戠害 #5). ct_dispatcher.h
 // (the "richer" header) is the one that includes ct_receiver.h.
 // (Rev 11, P2-1) CtDispatcherBase is also forward-declared for the
 // m_dispatchers weak_ptr member.
@@ -1187,7 +927,7 @@ namespace crisp::event {
 /// std::shared_ptr for its entire lifetime. CtDispatcher and CtQueue store
 /// only std::weak_ptr<CtReceiver> (never extending lifetime); bindHandler()
 /// relies on shared_from_this(). Creating a CtReceiver on the stack or via
-/// new is a contract violation — the class provides CtReceiver::create<T>()
+/// new is a contract violation 鈥?the class provides CtReceiver::create<T>()
 /// as the only sanctioned construction path (see below).
 class CtReceiver : public std::enable_shared_from_this<CtReceiver> {
 public:
@@ -1203,14 +943,14 @@ public:
     /// Globally unique, stable object id (used in traces, tables, queues).
     uint64_t objectId() const noexcept;
 
-    /// The thread this receiver is affined to (see §7.14 / §10.2).
+    /// The thread this receiver is affined to (see 搂7.14 / 搂10.2).
     /// Set at construction to the creating thread's id.
     CtThreadId affinityThread() const noexcept;
 
     /// Thread-affinity checks (Rev 2, P1-6): forwarded to the embedded
-    /// CtThreadAffinity (契约 #4). Used by CtDispatcher::send (Step 1,
-    /// §8.1) and by post routing (§10.1). Debug: assertSameThread() aborts
-    /// on mismatch; release: returns false (caller degrades, §7.14).
+    /// CtThreadAffinity (濂戠害 #4). Used by CtDispatcher::send (Step 1,
+    /// 搂8.1) and by post routing (搂10.1). Debug: assertSameThread() aborts
+    /// on mismatch; release: returns false (caller degrades, 搂7.14).
     bool isOnThread() const noexcept;
     bool assertSameThread() const noexcept;
 
@@ -1219,14 +959,14 @@ public:
     ///
     /// This is the application-facing convenience entry point: it DELEGATES
     /// to `dispatcher->addHandler<T>(shared_from_this(), handler, name)`
-    /// (see §7.8) — there is exactly ONE registration table (the
+    /// (see 搂7.8) 鈥?there is exactly ONE registration table (the
     /// dispatcher's COW tables). bindHandler and addHandler are two names
-    /// for the same registration (Rev 2, P1-5: 职责划分见 契约 #5).
+    /// for the same registration (Rev 2, P1-5: 鑱岃矗鍒掑垎瑙?濂戠害 #5).
     ///
-    /// Requires: CtEventTraits<T>::kIsValid (see §7.2) and
-    ///           T ∈ EventSet of `dispatcher` (static_asserted there).
+    /// Requires: CtEventTraits<T>::kIsValid (see 搂7.2) and
+    ///           T 鈭?EventSet of `dispatcher` (static_asserted there).
     ///
-    /// Returns a move-only RAII token; destroying it unregisters (see §7.7).
+    /// Returns a move-only RAII token; destroying it unregisters (see 搂7.7).
     /// `name` is an optional human-readable tag stored for traces.
     template <typename EventSet, typename T>
     CtHandlerToken bindHandler(const std::shared_ptr<CtDispatcher<EventSet>>& dispatcher,
@@ -1234,17 +974,17 @@ public:
                                std::string_view name = {});
 
     /// Unregister all handlers bound to this receiver (used by ~CtReceiver
-    /// and by CtDispatcher's receiver reaping; see §9). Typically not called
+    /// and by CtDispatcher's receiver reaping; see 搂9). Typically not called
     /// directly by application code. Affects every dispatcher this receiver
     /// registered with.
     void unbindAll();
 
 private:
-    static uint64_t allocateObjectId();  ///< global atomic counter (see §6.1)
+    static uint64_t allocateObjectId();  ///< global atomic counter (see 搂6.1)
 
     uint64_t m_objectId = 0;             ///< assigned by allocateObjectId()
     CtThreadAffinity m_affinity;         ///< embedded affinity (Rev 2, P1-6)
-    std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers;  ///< (Rev 11, P2-1) dispatchers this receiver registered with — bindHandler registers, unbindAll traverses. NOT a second handler table (§7.5 契约 #5 allows this dispatcher list).
+    std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers;  ///< (Rev 11, P2-1) dispatchers this receiver registered with 鈥?bindHandler registers, unbindAll traverses. NOT a second handler table (搂7.5 濂戠害 #5 allows this dispatcher list).
 };
 
 /// Sanctioned factory: create a receiver (or subclass R) owned by shared_ptr.
@@ -1255,37 +995,21 @@ std::shared_ptr<R> createReceiver(Args&&... args);
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **鎵€鏈夋潈锛堢户鎵跨害鏉?#2锛?*锛歚CtReceiver` 蹇呴』鐢?`std::shared_ptr` 鎸佹湁銆傚垎鍙戝櫒涓庨槦鍒楀彧瀛?`weak_ptr<CtReceiver>`锛涙帴鏀惰€呴攢姣佹椂 `weak_ptr` 澶辨晥锛屽垎鍙戣嚜鍔ㄨ烦杩団€斺€?*鏃犳偓鍨傛寚閽堛€佹瀽鏋勬棤闇€鎵嬪姩娉ㄩ攢閬嶅巻**銆俙bindHandler` 鍐呴儴缁?`shared_from_this()` 鑾峰彇 `shared_ptr` 涓庡垎鍙戝櫒浜や簰锛屽洜姝ゆ爤涓?瑁?`new` 鍒涘缓浼氭姏 `std::bad_weak_ptr`锛堣繖鏄?*璁捐涓婄殑寮哄埗**锛屼笉鏄剰澶栵級銆?2. **`createReceiver<R>` 宸ュ巶**锛氬敮涓€鍙楄鍙殑鏋勯€犺矾寰勩€俙R` 榛樿 `CtReceiver`锛涘瓙绫荤洿鎺?`createReceiver<MyWidget>(...)` 鍗冲彲銆?*缂栫爜瀛恆gent 娉ㄦ剰**锛氬伐鍘傚唴閮ㄥ繀椤?`std::shared_ptr<R>(new R(...))` 鎴?`std::make_shared`锛圧 鐨勬瀯閫犲嚱鏁板彲璁块棶鎬х敱 R 鑷繁鎺у埗锛沗CtReceiver` 鑷韩鏋勯€犲嚱鏁颁负 public锛屼絾鏂囨。寮哄埗"涓嶇粡宸ュ巶涓嶅緱鍒涘缓"锛夈€?3. **`objectId()`**锛氬叏灞€閫掑鍘熷瓙璁℃暟鍣紙澶嶇敤 搂6.1 鐨勫湴鍧€娲剧敓鎬濊矾锛涙帴鏀惰€?id 涓庣被鍨嬮敭鏄袱涓嫭绔嬮敭绌洪棿锛夈€俰d 绋冲畾銆佸崟璋冦€佹棤纰版挒锛?4 浣嶅洖缁曞湪瀹炶返涓婁笉鍙揪锛夈€?4. **`affinityThread()` / `isOnThread()` / `assertSameThread()`锛圧ev 2, P1-6锛?*锛氫笁涓柟娉曢兘杞彂鍒板唴宓岀殑 `CtThreadAffinity m_affinity`锛堟瀯閫犳椂璁板綍鍒涘缓绾跨▼锛夈€俙affinityThread()` = `m_affinity.thread()`锛沗isOnThread()` = `m_affinity.isOnThread()`锛沗assertSameThread()` = `m_affinity.assertSameThread()`銆傚畠瀹氫箟 `send/post` 鐨勫綊灞炲垽瀹氬熀鍑嗭紙搂8.1 Step 1銆伮?0.2锛夆€斺€?*搂8.1 鐨?`receiver->assertSameThread()` 璋冪敤鐐逛笌杩欓噷绛惧悕涓ユ牸瀵瑰簲**銆?5. **`bindHandler<T>` 涓?`CtDispatcher::addHandler<T>` 鐨勫叧绯伙紙Rev 2, P1-5 瑁佸畾锛氬苟瀛橈紝鑱岃矗鍒掑垎锛?*锛?   - **涓€涓敞鍐岃〃**锛氫袱鑰呰惤杩?*鍚屼竴** dispatcher COW 琛紝鏃犵浜屽娉ㄥ唽鏈哄埗銆俙bindHandler` 鏄?*搴旂敤渚т究鎹峰叆鍙?*锛堟帴鏀惰€呰瑙掋€侀殣鍚?`shared_from_this()`锛夛紱`addHandler` 鏄?*dispatcher 鍘熷鍏ュ彛**锛堝彲鐢?`nullptr`/骞挎挱鏉＄洰銆佸唴閮ㄤ笌妗ユ帴灞備娇鐢級銆?   - `bindHandler` 鐨勫疄鐜?= `return dispatcher->template addHandler<T>(shared_from_this(), std::move(handler), name);`銆?*缂栬瘧鏈熸牎楠屽畬鍏ㄥ鐢?addHandler 鐨?`static_assert`**锛坄T 鈭?EventSet`锛夛紝bindHandler 鑷韩涓嶅姞閲嶅鏂█銆?*锛圧ev 12, P2-A锛塨indHandler 鍚屾椂鍚?`m_dispatchers` 鐧昏璇?dispatcher锛坵eak_ptr锛夛紝渚?`unbindAll()` 瀹氫綅**鈥斺€旇繖鏄?dispatcher 鎸囬拡鍒楄〃锛?*涓嶆槸**绗簩濂?handler 琛紙搂9.1 濂戠害 #4锛夈€?   - 鑻ヤ袱鑰呯鍚嶆湭鏉ユ紨鍖栧繀椤讳繚鎸?bindHandler 濮旀墭 addHandler"杩欎竴鍏崇郴锛?*涓嶅緱**鍦?receiver 渚х淮鎶ょ嫭绔嬫敞鍐岄泦鍚堬紙鍚﹀垯 搂9 鐨勬墍鏈夋潈涓嶅彉閲忚鐮村潖锛夈€?6. **`unbindAll()`锛圧ev 12, P2-A锛?*锛氭瀽鏋勪笌鍥炴敹璺緞浣跨敤锛涘簲鐢ㄤ唬鐮佷竴鑸笉鐩存帴璋冪敤锛堟瀽鏋勪細璋冪敤瀹冿級銆傚疄鐜?= 閬嶅巻 `m_dispatchers`锛屽姣忎釜 `lock()` 鎴愬姛鐨?dispatcher 璋?**`unregisterReceiver(objectId())`**锛埪?.8锛宲rotected锛孋tReceiver 鏄?friend锛夆€斺€旂粡 COW 娉ㄩ攢渚嬬▼绉婚櫎璇ユ帴鏀惰€呯殑鍏ㄩ儴鏉＄洰銆?*闄堟棫寮辨寚閽堟棤瀹?*锛歵oken 宸叉敞閿€/dispatcher 宸叉瀽鏋勭殑鏉＄洰 `lock()` 澶辫触鍗宠烦杩囷紙搂9.1 濂戠害 #4锛夈€俤ispatcher 涓嶇淮鎶ゅ弽鍚戠储寮曪紝鍥炴敹鏄儼鎬х殑銆?
+**涓?v0 鐨勫樊寮?*锛?- v0 鐨?`CtReceiver` 鏃?`enable_shared_from_this`銆佹棤宸ュ巶銆乣addHandler(CtReceiver*, ...)` 鐩存帴鏀惰８鎸囬拡涓旇繑鍥?`bool`鈥斺€旀敞鍐岀敓鍛藉懆鏈熼潬"绾緥"銆傜幇鍦細**shared_ptr 鎸佹湁 + 宸ュ巶 + RAII token**銆?- v0 鏃犵嚎绋嬪綊灞炴蹇碉紱鏂板 `affinityThread()` 涓?`isOnThread()/assertSameThread()`銆?- v0 鏃?`bindHandler`锛堟敞鍐屽湪 dispatcher 涓婏級锛涚幇鍦?`bindHandler` 鏀跺湪鎺ユ敹鑰呬竴渚с€?*濮旀墭** dispatcher 鐨?`addHandler`锛圧ev 2 瑁佸畾锛氬苟瀛樿€岄潪搴熷純鍏朵竴锛夈€?
+### 7.6 CtDispatchContext锛坈t_dispatch_context.h锛屾柊澧烇級
 
-1. **所有权（继承约束 #2）**：`CtReceiver` 必须由 `std::shared_ptr` 持有。分发器与队列只存 `weak_ptr<CtReceiver>`；接收者销毁时 `weak_ptr` 失效，分发自动跳过——**无悬垂指针、析构无需手动注销遍历**。`bindHandler` 内部经 `shared_from_this()` 获取 `shared_ptr` 与分发器交互，因此栈上/裸 `new` 创建会抛 `std::bad_weak_ptr`（这是**设计上的强制**，不是意外）。
-2. **`createReceiver<R>` 工厂**：唯一受认可的构造路径。`R` 默认 `CtReceiver`；子类直接 `createReceiver<MyWidget>(...)` 即可。**编码子agent 注意**：工厂内部必须 `std::shared_ptr<R>(new R(...))` 或 `std::make_shared`（R 的构造函数可访问性由 R 自己控制；`CtReceiver` 自身构造函数为 public，但文档强制"不经工厂不得创建"）。
-3. **`objectId()`**：全局递增原子计数器（复用 §6.1 的地址派生思路；接收者 id 与类型键是两个独立键空间）。id 稳定、单调、无碰撞（64 位回绕在实践上不可达）。
-4. **`affinityThread()` / `isOnThread()` / `assertSameThread()`（Rev 2, P1-6）**：三个方法都转发到内嵌的 `CtThreadAffinity m_affinity`（构造时记录创建线程）。`affinityThread()` = `m_affinity.thread()`；`isOnThread()` = `m_affinity.isOnThread()`；`assertSameThread()` = `m_affinity.assertSameThread()`。它定义 `send/post` 的归属判定基准（§8.1 Step 1、§10.2）——**§8.1 的 `receiver->assertSameThread()` 调用点与这里签名严格对应**。
-5. **`bindHandler<T>` 与 `CtDispatcher::addHandler<T>` 的关系（Rev 2, P1-5 裁定：并存，职责划分）**：
-   - **一个注册表**：两者落进**同一** dispatcher COW 表，无第二套注册机制。`bindHandler` 是**应用侧便捷入口**（接收者视角、隐含 `shared_from_this()`）；`addHandler` 是**dispatcher 原始入口**（可用 `nullptr`/广播条目、内部与桥接层使用）。
-   - `bindHandler` 的实现 = `return dispatcher->template addHandler<T>(shared_from_this(), std::move(handler), name);`。**编译期校验完全复用 addHandler 的 `static_assert`**（`T ∈ EventSet`），bindHandler 自身不加重复断言。**（Rev 12, P2-A）bindHandler 同时向 `m_dispatchers` 登记该 dispatcher（weak_ptr），供 `unbindAll()` 定位**——这是 dispatcher 指针列表，**不是**第二套 handler 表（§9.1 契约 #4）。
-   - 若两者签名未来演化必须保持"bindHandler 委托 addHandler"这一关系；**不得**在 receiver 侧维护独立注册集合（否则 §9 的所有权不变量被破坏）。
-6. **`unbindAll()`（Rev 12, P2-A）**：析构与回收路径使用；应用代码一般不直接调用（析构会调用它）。实现 = 遍历 `m_dispatchers`，对每个 `lock()` 成功的 dispatcher 调 **`unregisterReceiver(objectId())`**（§7.8，protected，CtReceiver 是 friend）——经 COW 注销例程移除该接收者的全部条目。**陈旧弱指针无害**：token 已注销/dispatcher 已析构的条目 `lock()` 失败即跳过（§9.1 契约 #4）。dispatcher 不维护反向索引，回收是惰性的。
-
-**与 v0 的差异**：
-- v0 的 `CtReceiver` 无 `enable_shared_from_this`、无工厂、`addHandler(CtReceiver*, ...)` 直接收裸指针且返回 `bool`——注册生命周期靠"纪律"。现在：**shared_ptr 持有 + 工厂 + RAII token**。
-- v0 无线程归属概念；新增 `affinityThread()` 与 `isOnThread()/assertSameThread()`。
-- v0 无 `bindHandler`（注册在 dispatcher 上）；现在 `bindHandler` 收在接收者一侧、**委托** dispatcher 的 `addHandler`（Rev 2 裁定：并存而非废弃其一）。
-
-### 7.6 CtDispatchContext（ct_dispatch_context.h，新增）
-
-**职责**：一次分发步骤的不可变上下文——**只读**，在分发管线中填充，传给观察者（`CtObserver`）与 trace。它让观察者"看见"事件当前处于哪个相位、发给谁、经过第几个过滤器、耗时多少，而**不暴露任何可改变分发结果的句柄**。
-
-**精确签名**：
-
+**鑱岃矗**锛氫竴娆″垎鍙戞楠ょ殑涓嶅彲鍙樹笂涓嬫枃鈥斺€?*鍙**锛屽湪鍒嗗彂绠＄嚎涓～鍏咃紝浼犵粰瑙傚療鑰咃紙`CtObserver`锛変笌 trace銆傚畠璁╄瀵熻€?鐪嬭"浜嬩欢褰撳墠澶勪簬鍝釜鐩镐綅銆佸彂缁欒皝銆佺粡杩囩鍑犱釜杩囨护鍣ㄣ€佽€楁椂澶氬皯锛岃€?*涓嶆毚闇蹭换浣曞彲鏀瑰彉鍒嗗彂缁撴灉鐨勫彞鏌?*銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_dispatch_context.h（新增）
+// ct_dispatch_context.h锛堟柊澧烇級
 #pragma once
 #include <chrono>
 #include <cstdint>
 #include "ct_event.h"      // CtEventOrigin, CtTracePhase (Rev 7, P1-3: CtTracePhase lives here now)
 
-// (Rev 7, P1-3) NO #include "ct_trace.h" here — ct_trace.h includes THIS
+// (Rev 7, P1-3) NO #include "ct_trace.h" here 鈥?ct_trace.h includes THIS
 // header (CtTraceRecord holds a CtDispatchContext by value). CtTracePhase
 // has moved into ct_event.h so both headers get it from a single common
 // source; the include graph is now acyclic (ctx -> event, trace -> ctx).
@@ -1294,19 +1018,19 @@ namespace crisp::event {
 
 /// Immutable, read-only context describing one dispatch step.
 /// Filled by CtDispatcher during dispatch; handed to observers and trace.
-/// Observers MUST NOT mutate it (const) — observation cannot affect outcome.
+/// Observers MUST NOT mutate it (const) 鈥?observation cannot affect outcome.
 ///
 /// (Rev 2, P1-2) The default constructor is PRIVATE so application code can
-/// never fabricate a context ("应用不可伪造" holds); the dispatcher and the
+/// never fabricate a context ("搴旂敤涓嶅彲浼€? holds); the dispatcher and the
 /// trace ring are friends. Because the default constructor still EXISTS
-/// (private), CtTraceRecord (§7.9) remains a default-constructible
+/// (private), CtTraceRecord (搂7.9) remains a default-constructible
 /// aggregate and `m_buffer[kCapacity]{}` value-initialization compiles.
 class CtDispatchContext {
 public:
     CtDispatchContext(const CtDispatchContext&) = default;   ///< cheap value snapshot
     CtDispatchContext& operator=(const CtDispatchContext&) = default;
 
-    /// The pipeline phase this step corresponds to (see §7.9).
+    /// The pipeline phase this step corresponds to (see 搂7.9).
     CtTracePhase phase() const noexcept;
 
     /// objectId of the target receiver (0 for broadcast / not yet known).
@@ -1322,7 +1046,7 @@ public:
     std::size_t handlerCount() const noexcept;
 
 private:
-    // Filled only by CtDispatcher (friend) — application code never builds one.
+    // Filled only by CtDispatcher (friend) 鈥?application code never builds one.
     // (Rev 2, P1-2) Private default ctor: exists so CtTraceRecord can hold
     // and value-initialize it, but is inaccessible to application code.
     CtDispatchContext() noexcept = default;
@@ -1330,7 +1054,7 @@ private:
     friend class CtTrace;
     friend class CtDispatcherBase;
     template <typename> friend class CtDispatcher;
-    template <typename> friend class CtQueue;   ///< (Rev 4, P1-3) records async phases during drain/overflow (§7.10 契约 #6)
+    template <typename> friend class CtQueue;   ///< (Rev 4, P1-3) records async phases during drain/overflow (搂7.10 濂戠害 #6)
 
     CtTracePhase m_phase = CtTracePhase::kDispatched;
     uint64_t m_receiverId = 0;
@@ -1342,25 +1066,15 @@ private:
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **绾彧璇?*锛氭墍鏈?getter 杩斿洖 const 鍊硷紱鏃犱慨鏀瑰櫒銆傝瀵熻€呮嬁鍒板畠鍙兘"鐪?锛屼笉鑳芥敼鍒嗗彂缁撴灉锛堢户鎵跨害鏉?#4锛歚CtObserver<T>` 绾彧璇伙級銆?2. **鐢熷懡鍛ㄦ湡**锛氱敱鍒嗗彂鍣ㄥ湪鏍堜笂鏋勯€狅紙姣忔楠や竴涓紝闆跺爢鍒嗛厤锛夛紝浠呭湪涓€娆″洖璋冩湡闂存湁鏁堬紱瑙傚療鑰?*涓嶅緱**瀛樺偍寮曠敤璺ㄥ洖璋冧娇鐢紙鏂囨。濂戠害锛岄潪缂栬瘧鏈熷己鍒讹級銆?3. **`phase()`** 瑕嗙洊鍚屾鍥涚浉 + 寮傛鐩镐綅锛坄kQueued/kDropped`锛屄?.9锛夆€斺€旇瀵熻€呮嵁姝ゅ尯鍒?鍏ラ槦浜?涓?琚涪寮冧簡"绛夊紓姝ョ姸鎬侊紝杩欐槸 v0 缂哄け鐨勮娴嬭兘鍔涖€?4. **`filterIndex()`**锛? 鍩哄簭鍙凤紝鏍囪瘑"绗嚑涓繃婊ゅ櫒"锛沗elapsed()` 渚涜€楁椂瑙傛祴锛堢儹璺緞 `steady_clock::now()` 鍙皟鐢ㄤ竴娆°€佺敱鍒嗗彂鍣ㄧ粺涓€璁℃椂骞跺鐢級銆?*缂栫爜瀛恆gent 娉ㄦ剰**锛氬垎鍙戝櫒鍦ㄨ繘鍏ョ绾挎椂璁板綍 `t0`锛屾瘡涓楠ょ粨鏉熸椂濉?`m_elapsed = now() - t0`锛屼笉瑕佹瘡涓洖璋冨唴鍚勮嚜 `now()`銆?5. **`handlerCount()`**锛氬綋鍓嶅揩鐓т腑璇ョ被鍨嬪瓨娲?handler 鏁扳€斺€旇瑙傚療鑰呭尯鍒?骞挎挱绌鸿〃"涓?鏈?handler 浣?receiver 宸叉"銆?6. **涓嶅彲浼€狅紙Rev 2, P1-2锛汻ev 3, N1锛汻ev 4, P1-3 缁熶竴锛?*锛氶粯璁ゆ瀯閫?*绉佹湁** + 鍥涗釜 friend锛坄CtTrace`銆乣CtDispatcherBase`銆乣CtDispatcher<EventSet>`銆乣CtQueue<EventSet>`锛夈€俤ispatcher 鍦ㄥ垎鍙戞椂鐢?`CtDispatchContext ctx;` 鏋勯€犳爤涓婂疄渚嬪苟濉厖鎴愬憳锛沗CtTrace::record` **鎸夊€?*鎺ユ敹 `CtDispatchContext ctx`锛埪?.9 绛惧悕锛涜皟鐢ㄤ晶浼?`const&` 鎷疯礉杩?`CtTraceRecord`锛孯ev 9, P3 鏂囧瓧瀵归綈锛夈€?搴旂敤涓嶅彲浼€?浠嶇劧鎴愮珛锛氬簲鐢ㄤ唬鐮佹棤娉曢粯璁ゆ瀯閫犮€佷篃鏃犳硶璁块棶绉佹湁鎴愬憳銆?*friend 閫氶亾鐢ㄤ簬寮傛鐩镐綅璁板綍**锛歚kQueued/kDropped` 鐢?*褰掑睘绾跨▼**鍦?`CtEventLoop` 鎺掔┖锛堢粡 `CtQueue` 鐨?`trace()`/`popDropped()` 閫氶亾锛変笌 `CtQueue` 婧㈠嚭澶勭悊鏃惰褰曗€斺€?*璁板綍涓讳綋鏄?`CtQueue<EventSet>`**锛坒riend 宸插惈锛屽绾?#6/搂7.10锛夛紝`CtEventLoop` **涓嶇洿鎺ユ瀯閫?ctx**锛堜笉闇€瑕?friend鈥斺€斿畠缁?`CtQueue` 鐨勯€氶亾璁板綍锛孯ev 4, P1-3 瑁佸畾锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氫笉寰楁妸鏋勯€犳敼鎴?public锛堜細閲嶆柊鎵撳紑浼€犵獥鍙ｏ級锛屼篃涓嶅緱鎶婇粯璁ゆ瀯閫犳敼鍥?`= delete`锛堜細鐮村潖 搂7.9 鐨?`CtTraceRecord` aggregate 鏁扮粍锛夛紱`CtQueue<EventSet>` 妯℃澘鐨勫弸鍏冨０鏄庡啓鍏ㄦā鏉垮弬鏁帮紙`template <typename> friend class CtQueue;`锛夈€?
+**涓?v0 鐨勫樊寮?*锛歷0 鐨?`CtObserver<T>` 鍙敹鍒?`(const CtEvent<T>&, CtTracePhase)`锛屾棤涓婁笅鏂囷紱鐜板湪瑙傚療鑰呰幏寰楀畬鏁村彧璇讳笂涓嬫枃銆?*CtDispatchContext 鐢?dispatcher 鐙崰鏋勯€狅紙friend锛夛紝搴旂敤浠ｇ爜涓嶅彲浼€?*銆?
+### 7.7 CtHandlerId / CtHandlerToken锛坈t_handler_token.h锛屾柊澧烇級
 
-1. **纯只读**：所有 getter 返回 const 值；无修改器。观察者拿到它只能"看"，不能改分发结果（继承约束 #4：`CtObserver<T>` 纯只读）。
-2. **生命周期**：由分发器在栈上构造（每步骤一个，零堆分配），仅在一次回调期间有效；观察者**不得**存储引用跨回调使用（文档契约，非编译期强制）。
-3. **`phase()`** 覆盖同步四相 + 异步相位（`kQueued/kDropped`，§7.9）——观察者据此区分"入队了"与"被丢弃了"等异步状态，这是 v0 缺失的观测能力。
-4. **`filterIndex()`**：1 基序号，标识"第几个过滤器"；`elapsed()` 供耗时观测（热路径 `steady_clock::now()` 只调用一次、由分发器统一计时并复用）。**编码子agent 注意**：分发器在进入管线时记录 `t0`，每个步骤结束时填 `m_elapsed = now() - t0`，不要每个回调内各自 `now()`。
-5. **`handlerCount()`**：当前快照中该类型存活 handler 数——让观察者区分"广播空表"与"有 handler 但 receiver 已死"。
-6. **不可伪造（Rev 2, P1-2；Rev 3, N1；Rev 4, P1-3 统一）**：默认构造**私有** + 四个 friend（`CtTrace`、`CtDispatcherBase`、`CtDispatcher<EventSet>`、`CtQueue<EventSet>`）。dispatcher 在分发时用 `CtDispatchContext ctx;` 构造栈上实例并填充成员；`CtTrace::record` **按值**接收 `CtDispatchContext ctx`（§7.9 签名；调用侧传 `const&` 拷贝进 `CtTraceRecord`，Rev 9, P3 文字对齐）。"应用不可伪造"仍然成立：应用代码无法默认构造、也无法访问私有成员。**friend 通道用于异步相位记录**：`kQueued/kDropped` 由**归属线程**在 `CtEventLoop` 排空（经 `CtQueue` 的 `trace()`/`popDropped()` 通道）与 `CtQueue` 溢出处理时记录——**记录主体是 `CtQueue<EventSet>`**（friend 已含，契约 #6/§7.10），`CtEventLoop` **不直接构造 ctx**（不需要 friend——它经 `CtQueue` 的通道记录，Rev 4, P1-3 裁定）。**编码子agent 注意**：不得把构造改成 public（会重新打开伪造窗口），也不得把默认构造改回 `= delete`（会破坏 §7.9 的 `CtTraceRecord` aggregate 数组）；`CtQueue<EventSet>` 模板的友元声明写全模板参数（`template <typename> friend class CtQueue;`）。
-
-**与 v0 的差异**：v0 的 `CtObserver<T>` 只收到 `(const CtEvent<T>&, CtTracePhase)`，无上下文；现在观察者获得完整只读上下文。**CtDispatchContext 由 dispatcher 独占构造（friend），应用代码不可伪造**。
-
-### 7.7 CtHandlerId / CtHandlerToken（ct_handler_token.h，新增）
-
-**职责**：`CtHandlerId` 是注册的全局唯一整数句柄；`CtHandlerToken` 是把"注册"变成 RAII 资源的 move-only 句柄——析构自动注销，与分发器共享 `CtTokenState`（§6.4），token 比 dispatcher 长寿不 UB。
-
-**精确签名**（机制见 §6.4；此处给出最终公开形态）：
-
+**鑱岃矗**锛歚CtHandlerId` 鏄敞鍐岀殑鍏ㄥ眬鍞竴鏁存暟鍙ユ焺锛沗CtHandlerToken` 鏄妸"娉ㄥ唽"鍙樻垚 RAII 璧勬簮鐨?move-only 鍙ユ焺鈥斺€旀瀽鏋勮嚜鍔ㄦ敞閿€锛屼笌鍒嗗彂鍣ㄥ叡浜?`CtTokenState`锛埪?.4锛夛紝token 姣?dispatcher 闀垮涓?UB銆?
+**绮剧‘绛惧悕**锛堟満鍒惰 搂6.4锛涙澶勭粰鍑烘渶缁堝叕寮€褰㈡€侊級锛?
 ```cpp
-// ct_handler_token.h（新增）
+// ct_handler_token.h锛堟柊澧烇級
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -1376,7 +1090,7 @@ class CtDispatcherBase;
 
 namespace crisp::event {
 
-/// Globally unique registration id (monotonic counter, see §6.1).
+/// Globally unique registration id (monotonic counter, see 搂6.1).
 using CtHandlerId = std::uint64_t;
 
 namespace detail {
@@ -1384,7 +1098,7 @@ namespace detail {
 /// Shared state linking a handler token to its owning dispatcher.
 /// Created on registration; alive=false once the dispatcher is gone.
 /// (Rev 2, P2-10) `owner` is a weak_ptr: a token destroyed on an arbitrary
-/// thread (契约 #6) lock()s it before calling unregisterHandler, so the
+/// thread (濂戠害 #6) lock()s it before calling unregisterHandler, so the
 /// dispatcher stays alive through the unregister call.
 struct CtTokenState {
     std::atomic<bool> alive{true};          ///< false once the dispatcher is destroyed
@@ -1403,7 +1117,7 @@ struct CtTokenState {
 class CtHandlerToken {
 public:
     CtHandlerToken() noexcept = default;         ///< null token
-    ~CtHandlerToken() noexcept;                  ///< unregisters if still alive (Rev 5, N-11: noexcept unified with §6.4)
+    ~CtHandlerToken() noexcept;                  ///< unregisters if still alive (Rev 5, N-11: noexcept unified with 搂6.4)
 
     CtHandlerToken(CtHandlerToken&& other) noexcept;  ///< transfers ownership
     CtHandlerToken& operator=(CtHandlerToken&& other) noexcept;
@@ -1420,8 +1134,8 @@ public:
 private:
     // (Rev 8, P1-2) Friendship does NOT inherit: the non-empty token is
     // constructed inside CtDispatcher<EventSet>::addHandler/addFilter/
-    // addObserver (template derived class, §7.8), so the TEMPLATED dispatcher
-    // must be a friend too — exactly the same gap fixed for CtEvent in §7.3.
+    // addObserver (template derived class, 搂7.8), so the TEMPLATED dispatcher
+    // must be a friend too 鈥?exactly the same gap fixed for CtEvent in 搂7.3.
     friend class CtDispatcherBase;
     template <typename> friend class CtDispatcher;
     std::shared_ptr<detail::CtTokenState> m_state;  ///< shared with dispatcher
@@ -1430,23 +1144,13 @@ private:
 } // namespace crisp::event
 ```
 
-**语义契约**：
-
-1. **`CtHandlerId` = `uint64_t`**：全局单调递增（独立计数器，与 objectId 分开）。它**不是**分发表下标——表内用 `CtTypeKey<T>` 索引，id 只用于 token 对账、trace 与测试。
-2. **move-only（Rev 12, P3 钉死赋值语义）**：拷贝删除——一份注册只有一个注销者。move 转移 `m_state`，源 token 变空（`valid() == false`）。**move 赋值**：目标 token 若已持有**存活注册**，**必须先注销旧注册再接管**（等价于先析构目标、再 move-construct；实现 = 目标先走 `~CtHandlerToken` 注销流程，再接管源的 `m_state`）。禁止拷贝。
-3. **析构自动注销（Rev 2, P2-10 修订）**：`~CtHandlerToken` 流程——① 读 `m_state->alive`；② 若 true，`auto owner = m_state->owner.lock()`；③ 若 `lock()` 成功，调 `owner->unregisterHandler(id)`（该例程**持 `m_writeMutex`**，见 §7.8/§9.2）；④ 若 `alive==false` 或 `lock()` 失败（dispatcher 已析构/析构中），静默跳过——**不触碰 dispatcher 内存，不 UB**。第②步的 `lock()`（引用计数 +1）保证 dispatcher 在注销例程执行期间**不会析构**——"token 读到 alive=true → dispatcher 析构中 → owner 悬垂"竞态被关闭（dispatcher 析构与注销例程持**同一把** `m_writeMutex`，锁内双检，§9.2 契约 #1）。
-4. **空 token**：默认构造即 null（`valid()==false`, `id()==0`）；析构空 token 是无操作。
-5. **`CtDispatcherBase` 与 `CtDispatcher<EventSet>` 为友元（Rev 8, P1-2）**：只有分发器（基类 + 模板派生类）能构造非空 token。应用代码只能持有/移动/析构。
-6. **线程安全**：`~CtHandlerToken` 可在任意线程调用（注销例程自身持 `m_writeMutex`，弱引用 `lock()` 保护 dispatcher 生命周期）；但**推荐在注册线程注销**（避免跨线程 COW 发布与随后 §10 的归属规则纠缠）。
-
-### 7.8 CtDispatcher<EventSet>（ct_dispatcher.h，保留+修改）
-
-**职责**：类型安全的事件分发器——持有 COW 分发表（§6.5）、驱动管线 `observers(pre) → filters → handlers → observers(post)`，并提供 `send`/`broadcast`（同步）与 `post`/`postTo`（异步，M2，§10）四类入口。
-
-**精确签名**：
-
+**璇箟濂戠害**锛?
+1. **`CtHandlerId` = `uint64_t`**锛氬叏灞€鍗曡皟閫掑锛堢嫭绔嬭鏁板櫒锛屼笌 objectId 鍒嗗紑锛夈€傚畠**涓嶆槸**鍒嗗彂琛ㄤ笅鏍団€斺€旇〃鍐呯敤 `CtTypeKey<T>` 绱㈠紩锛宨d 鍙敤浜?token 瀵硅处銆乼race 涓庢祴璇曘€?2. **move-only锛圧ev 12, P3 閽夋璧嬪€艰涔夛級**锛氭嫹璐濆垹闄も€斺€斾竴浠芥敞鍐屽彧鏈変竴涓敞閿€鑰呫€俶ove 杞Щ `m_state`锛屾簮 token 鍙樼┖锛坄valid() == false`锛夈€?*move 璧嬪€?*锛氱洰鏍?token 鑻ュ凡鎸佹湁**瀛樻椿娉ㄥ唽**锛?*蹇呴』鍏堟敞閿€鏃ф敞鍐屽啀鎺ョ**锛堢瓑浠蜂簬鍏堟瀽鏋勭洰鏍囥€佸啀 move-construct锛涘疄鐜?= 鐩爣鍏堣蛋 `~CtHandlerToken` 娉ㄩ攢娴佺▼锛屽啀鎺ョ婧愮殑 `m_state`锛夈€傜姝㈡嫹璐濄€?3. **鏋愭瀯鑷姩娉ㄩ攢锛圧ev 2, P2-10 淇锛?*锛歚~CtHandlerToken` 娴佺▼鈥斺€斺憼 璇?`m_state->alive`锛涒憽 鑻?true锛宍auto owner = m_state->owner.lock()`锛涒憿 鑻?`lock()` 鎴愬姛锛岃皟 `owner->unregisterHandler(id)`锛堣渚嬬▼**鎸?`m_writeMutex`**锛岃 搂7.8/搂9.2锛夛紱鈶?鑻?`alive==false` 鎴?`lock()` 澶辫触锛坉ispatcher 宸叉瀽鏋?鏋愭瀯涓級锛岄潤榛樿烦杩団€斺€?*涓嶈Е纰?dispatcher 鍐呭瓨锛屼笉 UB**銆傜鈶℃鐨?`lock()`锛堝紩鐢ㄨ鏁?+1锛変繚璇?dispatcher 鍦ㄦ敞閿€渚嬬▼鎵ц鏈熼棿**涓嶄細鏋愭瀯**鈥斺€?token 璇诲埌 alive=true 鈫?dispatcher 鏋愭瀯涓?鈫?owner 鎮瀭"绔炴€佽鍏抽棴锛坉ispatcher 鏋愭瀯涓庢敞閿€渚嬬▼鎸?*鍚屼竴鎶?* `m_writeMutex`锛岄攣鍐呭弻妫€锛屄?.2 濂戠害 #1锛夈€?4. **绌?token**锛氶粯璁ゆ瀯閫犲嵆 null锛坄valid()==false`, `id()==0`锛夛紱鏋愭瀯绌?token 鏄棤鎿嶄綔銆?5. **`CtDispatcherBase` 涓?`CtDispatcher<EventSet>` 涓哄弸鍏冿紙Rev 8, P1-2锛?*锛氬彧鏈夊垎鍙戝櫒锛堝熀绫?+ 妯℃澘娲剧敓绫伙級鑳芥瀯閫犻潪绌?token銆傚簲鐢ㄤ唬鐮佸彧鑳芥寔鏈?绉诲姩/鏋愭瀯銆?6. **绾跨▼瀹夊叏**锛歚~CtHandlerToken` 鍙湪浠绘剰绾跨▼璋冪敤锛堟敞閿€渚嬬▼鑷韩鎸?`m_writeMutex`锛屽急寮曠敤 `lock()` 淇濇姢 dispatcher 鐢熷懡鍛ㄦ湡锛夛紱浣?*鎺ㄨ崘鍦ㄦ敞鍐岀嚎绋嬫敞閿€**锛堥伩鍏嶈法绾跨▼ COW 鍙戝竷涓庨殢鍚?搂10 鐨勫綊灞炶鍒欑籂缂狅級銆?
+### 7.8 CtDispatcher<EventSet>锛坈t_dispatcher.h锛屼繚鐣?淇敼锛?
+**鑱岃矗**锛氱被鍨嬪畨鍏ㄧ殑浜嬩欢鍒嗗彂鍣ㄢ€斺€旀寔鏈?COW 鍒嗗彂琛紙搂6.5锛夈€侀┍鍔ㄧ绾?`observers(pre) 鈫?filters 鈫?handlers 鈫?observers(post)`锛屽苟鎻愪緵 `send`/`broadcast`锛堝悓姝ワ級涓?`post`/`postTo`锛堝紓姝ワ紝M2锛屄?0锛夊洓绫诲叆鍙ｃ€?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_dispatcher.h（保留+修改；v0 移除项不再列出）
+// ct_dispatcher.h锛堜繚鐣?淇敼锛泇0 绉婚櫎椤逛笉鍐嶅垪鍑猴級
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -1461,13 +1165,13 @@ private:
 #include "ct_handler_token.h"    // CtHandlerId, CtHandlerToken
 #include "ct_receiver.h"         // CtReceiver
 #include "ct_dispatch_context.h" // CtDispatchContext
-#include "ct_thread_affinity.h"  // CtThreadAffinity, CtThreadId (Rev 5, N-13: self-contained — m_affinity member)
+#include "ct_thread_affinity.h"  // CtThreadAffinity, CtThreadId (Rev 5, N-13: self-contained 鈥?m_affinity member)
 #include "ct_trace.h"            // CtTrace, CtTracePhase
 
 // (Rev 5, N-2) CtDispatcherBase::dispatchAny takes CtPendingEventBase&. The
 // full definition lives in ct_queue.h (M2); a forward declaration suffices
 // for a reference parameter, keeping ct_dispatcher.h free of a ct_queue.h
-// dependency in M1 (§12.1 step 9). CtEventLoop (which includes ct_queue.h)
+// dependency in M1 (搂12.1 step 9). CtEventLoop (which includes ct_queue.h)
 // provides the complete type at its call site.
 namespace crisp::event {
 class CtPendingEventBase;
@@ -1478,11 +1182,11 @@ namespace crisp::event {
 /// Type-erased base (non-template). Holds the COW table + unregister logic.
 /// Templated CtDispatcher<EventSet> derives from it to reuse non-template
 /// machinery (tables, mutex, token state).
-/// (Rev 9, P2-3) Ownership rule (MANDATORY, same as CtReceiver §7.5): a
+/// (Rev 9, P2-3) Ownership rule (MANDATORY, same as CtReceiver 搂7.5): a
 /// CtDispatcher MUST be created via std::make_shared and held by
 /// shared_ptr. CtDispatcherBase inherits enable_shared_from_this; the token
 /// state's `owner` is a weak_ptr<CtDispatcherBase> and makeTokenState()
-/// relies on shared_from_this() — a stack-allocated dispatcher would throw
+/// relies on shared_from_this() 鈥?a stack-allocated dispatcher would throw
 /// std::bad_weak_ptr on the first addHandler. Stack/new construction is a
 /// contract violation. (CtEventLoop::setDispatcher takes shared_ptr for the
 /// same reason.)
@@ -1494,56 +1198,56 @@ public:
     CtDispatcherBase(const CtDispatcherBase&) = delete;
     CtDispatcherBase& operator=(const CtDispatcherBase&) = delete;
 
-    /// The trace store of this dispatcher (observability, §7.9).
+    /// The trace store of this dispatcher (observability, 搂7.9).
     CtTrace& trace() noexcept;
 
     /// Dispatcher-owned thread affinity (Rev 2, P1-6): recorded at
-    /// construction; the basis for broadcast's Step 1 assertion (§8.2).
+    /// construction; the basis for broadcast's Step 1 assertion (搂8.2).
     /// isOnThread() is a cheap non-fatal check; assertSameThread() aborts
-    /// in debug builds on mismatch and returns false in release (§7.14).
+    /// in debug builds on mismatch and returns false in release (搂7.14).
     bool isOnThread() const noexcept;
     bool assertSameThread() const noexcept;
 
 protected:
     /// Internal unregister path invoked by CtHandlerToken's destructor.
     /// Holds m_writeMutex; called with the owner weak_ptr already locked
-    /// (reference count holds the dispatcher alive, §9.2 契约 #1).
+    /// (reference count holds the dispatcher alive, 搂9.2 濂戠害 #1).
     void unregisterHandler(CtHandlerId id);
 
     /// (Rev 12, P2-A) Bulk unregister ALL entries (Handler/Filter/Observer)
     /// whose HandlerEntry::receiver matches receiverObjectId. Holds
-    /// m_writeMutex, COW-publishes. Called by CtReceiver::unbindAll() (§7.5,
-    /// §9.1 契约 #4) — receiver is a friend (below) so it can reach this
+    /// m_writeMutex, COW-publishes. Called by CtReceiver::unbindAll() (搂7.5,
+    /// 搂9.1 濂戠害 #4) 鈥?receiver is a friend (below) so it can reach this
     /// protected entry; NOT callable by application code directly.
     void unregisterReceiver(uint64_t receiverObjectId);
 
     std::shared_ptr<detail::CtTokenState> makeTokenState(CtHandlerId id);
 
-    /// Dispatch a type-erased pending event (Rev 3, N4 / Rev 4, P1-5 ③).
-    /// Called by CtEventLoop::exec during drain (§7.11 契约 #2). Internally
+    /// Dispatch a type-erased pending event (Rev 3, N4 / Rev 4, P1-5 鈶?.
+    /// Called by CtEventLoop::exec during drain (搂7.11 濂戠害 #2). Internally
     /// std::visit's the payload back to the concrete CtEvent<T> and runs the
-    /// §8.1 pipeline; key-match + eventSetId asserted before calling the
-    /// erased handler (§6.5). Defined in the templated CtDispatcher<EventSet>
+    /// 搂8.1 pipeline; key-match + eventSetId asserted before calling the
+    /// erased handler (搂6.5). Defined in the templated CtDispatcher<EventSet>
     /// via CRTP-free virtual dispatch on the erased variant index.
     /// (Rev 8, P1-4) M1 provides an UNREACHABLE stub definition
-    /// (`assert(false)` empty body — a reference parameter needs no complete
+    /// (`assert(false)` empty body 鈥?a reference parameter needs no complete
     /// type, so the empty body links without ct_queue.h); the real definition
-    /// lands in M2 once ct_dispatcher.h includes ct_queue.h (§12.1 step 9).
+    /// lands in M2 once ct_dispatcher.h includes ct_queue.h (搂12.1 step 9).
     /// (Rev 9, P1-1 + Rev 11, P3) ASYNC EXCEPTION: the drain path must NOT
-    /// re-assign the event's sequence number — the pending record was already
-    /// stamped at push time (enqueue order, §7.10 `sequence()`). "Runs the
-    /// §8.1 pipeline" means **Step 2 (COW snapshot) + Steps 4-8
-    /// (observers/filters/handlers/result) + Step 3's accepted reset** — NOT
+    /// re-assign the event's sequence number 鈥?the pending record was already
+    /// stamped at push time (enqueue order, 搂7.10 `sequence()`). "Runs the
+    /// 搂8.1 pipeline" means **Step 2 (COW snapshot) + Steps 4-8
+    /// (observers/filters/handlers/result) + Step 3's accepted reset** 鈥?NOT
     /// Step 3's sequence assignment; `kDispatched` is recorded with the
-    /// pending's enqueue sequence (§8.1 Step 3 async note).
-    /// (Rev 12, P3) BRANCH: `pending.isBroadcast()` → run the §8.2 broadcast
-    /// semantics (deliver to ALL live receivers registered for T, §8.2
-    /// Steps 1-8 with receiverId=0); otherwise → run the §8.1 directed
-    /// semantics (targeted lookup of `pending.target()`, §8.1 Steps 1-8).
+    /// pending's enqueue sequence (搂8.1 Step 3 async note).
+    /// (Rev 12, P3) BRANCH: `pending.isBroadcast()` 鈫?run the 搂8.2 broadcast
+    /// semantics (deliver to ALL live receivers registered for T, 搂8.2
+    /// Steps 1-8 with receiverId=0); otherwise 鈫?run the 搂8.1 directed
+    /// semantics (targeted lookup of `pending.target()`, 搂8.1 Steps 1-8).
     /// The branch is resolved HERE (dispatchAny), not in the drain loop.
     virtual void dispatchAny(CtPendingEventBase& pending) = 0;
 
-    // COW snapshot access (see §6.5): std::atomic_load(&m_tables).
+    // COW snapshot access (see 搂6.5): std::atomic_load(&m_tables).
     std::shared_ptr<const detail::CtDispatchTables> snapshot() const;
 
     std::mutex m_writeMutex;                          ///< guards registration/unregistration
@@ -1551,14 +1255,14 @@ protected:
     CtThreadAffinity m_affinity;                      ///< dispatcher thread affinity (Rev 2, P1-6)
     CtTrace m_trace;
     // (Rev 11, P1-2) SYNC sequence counter (single source for the sync path,
-    // §8.1 Step 3 / §8.2 / §7.10 契约 #9 "two independent key spaces").
+    // 搂8.1 Step 3 / 搂8.2 / 搂7.10 濂戠害 #9 "two independent key spaces").
     // send/broadcast run on the dispatcher's OWNING thread only (Rev 11,
     // P1-1 dual assertion), so a plain uint64_t is safe; ++ then copy into
-    // event.setSequence() at §8.1/§8.2 Step 3. Async events use the queue's
-    // m_seqCounter instead — this counter is never shared across threads.
+    // event.setSequence() at 搂8.1/搂8.2 Step 3. Async events use the queue's
+    // m_seqCounter instead 鈥?this counter is never shared across threads.
     uint64_t m_nextSequence = 0;
-    // (Rev 6, P1-3 / N-12 truly landed) debug dispatch-depth guard (§9.2
-    // 契约 #3): in release (NDEBUG) the guard is an EMPTY member — zero
+    // (Rev 6, P1-3 / N-12 truly landed) debug dispatch-depth guard (搂9.2
+    // 濂戠害 #3): in release (NDEBUG) the guard is an EMPTY member 鈥?zero
     // overhead; in debug it is a real size_t counter. The two branches MUST
     // differ (a both-size_t conditional would be meaningless).
 #if defined(NDEBUG)
@@ -1569,7 +1273,7 @@ protected:
 
     /// (Rev 6, P2-3) Every live CtTokenState created by makeTokenState is
     /// registered here (weak) so the destructor can flip alive=false + clear
-    /// owner for ALL tokens while holding m_writeMutex (§9.2 契约 #1 — the
+    /// owner for ALL tokens while holding m_writeMutex (搂9.2 濂戠害 #1 鈥?the
     /// destuctor must reach every token, so a collection is required).
     /// A token's unregisterHandler removes its own entry.
     std::vector<std::weak_ptr<detail::CtTokenState>> m_tokenStates;
@@ -1577,18 +1281,18 @@ protected:
     /// (Rev 3, N3) CtHandlerToken's destructor calls unregisterHandler(id)
     /// on the owning dispatcher base. The method is protected; the token is
     /// neither a derived class nor a member, so it MUST be a friend. The
-    /// destructor may run on an arbitrary thread (§7.7 契约 #6), making this
+    /// destructor may run on an arbitrary thread (搂7.7 濂戠害 #6), making this
     /// the ONLY sanctioned external path into unregisterHandler. NOT public:
     /// keeps the unregister entry point non-callable by application code.
     friend class CtHandlerToken;
 
     /// (Rev 5, P1-3) CtEventLoop::exec calls dispatchAny (protected) during
-    /// drain (§7.11 契约 #2). The loop is neither a derived class nor a
-    /// member, so it MUST be a friend — same rationale as CtHandlerToken.
+    /// drain (搂7.11 濂戠害 #2). The loop is neither a derived class nor a
+    /// member, so it MUST be a friend 鈥?same rationale as CtHandlerToken.
     friend class CtEventLoop;
 
     /// (Rev 12, P2-A) CtReceiver::unbindAll() calls unregisterReceiver
-    /// (protected, §7.8). The receiver is neither a derived class nor a
+    /// (protected, 搂7.8). The receiver is neither a derived class nor a
     /// member, so it MUST be a friend. NOT public: keeps bulk-unregister
     /// non-callable by application code (same rationale as CtHandlerToken).
     friend class CtReceiver;
@@ -1596,8 +1300,8 @@ protected:
 
 /// Type-safe, event-set-bounded dispatcher.
 ///
-/// EventSet is a CtEventSet<Ts...> (§7.4): all addHandler<T>/send<T> etc.
-/// require T ∈ EventSet (static_assert). This is the ONLY public dispatcher
+/// EventSet is a CtEventSet<Ts...> (搂7.4): all addHandler<T>/send<T> etc.
+/// require T 鈭?EventSet (static_assert). This is the ONLY public dispatcher
 /// type applications use; CtDispatcherBase is an implementation detail.
 template <typename EventSet>
 class CtDispatcher : public CtDispatcherBase {
@@ -1606,7 +1310,7 @@ public:
 
     /// Register a handler for event type T on receiver.
     /// Requires: CtEventTraits<T>::kIsValid && EventSet::contains<T>.
-    /// Returns a move-only RAII token (§7.7).
+    /// Returns a move-only RAII token (搂7.7).
     template <typename T>
     CtHandlerToken addHandler(const std::shared_ptr<CtReceiver>& receiver,
                               CtHandler<T> handler,
@@ -1619,16 +1323,16 @@ public:
                              std::string_view name = {});
 
     /// Register a pure observer for event type T (const, read-only; runs
-    /// both pre-dispatch and post-dispatch, see §8.1).
-    /// (Rev 3, N2) `CtObserver<T>` is the §5.2 single-argument alias:
+    /// both pre-dispatch and post-dispatch, see 搂8.1).
+    /// (Rev 3, N2) `CtObserver<T>` is the 搂5.2 single-argument alias:
     /// std::function<void(const CtEvent<T>&, const CtDispatchContext&)>.
     template <typename T>
     CtHandlerToken addObserver(CtObserver<T> observer,
                                std::string_view name = {});
 
     /// Synchronously dispatch `event` to a single receiver's handlers.
-    /// Requires: T ∈ EventSet (static_assert) and the current thread OWNS
-    /// `receiver` (thread-affinity assert, §8.2). Zero heap allocations.
+    /// Requires: T 鈭?EventSet (static_assert) and the current thread OWNS
+    /// `receiver` (thread-affinity assert, 搂8.2). Zero heap allocations.
     template <typename T>
     CtDispatchResult send(const std::shared_ptr<CtReceiver>& receiver,
                           CtEvent<T>& event);
@@ -1639,52 +1343,39 @@ public:
     CtDispatchResult broadcast(CtEvent<T>& event);
 
     /// Queue `event` to be delivered on the receiver's affinity thread
-    /// (async, §10). M2: placeholder returning kUnhandled is acceptable.
+    /// (async, 搂10). M2: placeholder returning kUnhandled is acceptable.
     template <typename T>
     CtDispatchResult post(const std::shared_ptr<CtReceiver>& receiver,
                           CtEvent<T>&& event);
 
-    /// Queue `event` to an EXPLICIT target thread (async, §10). M2.
+    /// Queue `event` to an EXPLICIT target thread (async, 搂10). M2.
     template <typename T>
     CtDispatchResult postTo(CtThreadId targetThread,
                             CtEvent<T>&& event);
 
-    /// Read the current trace snapshot (observability, §7.9).
+    /// Read the current trace snapshot (observability, 搂7.9).
     const CtTrace& trace() const noexcept;
 
 private:
     /// (Rev 7, P1-5) Concrete override of the pure virtual on the base: the
     /// templated dispatcher std::visits the erased pending event's payload
-    /// back to the concrete CtEvent<T> and runs the §8.1 pipeline. Declared
+    /// back to the concrete CtEvent<T> and runs the 搂8.1 pipeline. Declared
     /// here so CtDispatcher<EventSet> is instantiable (the base's pure
-    /// virtual is otherwise unimplemented → abstract class). Called by
-    /// CtEventLoop::exec during drain (§7.11 契约 #2, friend access).
+    /// virtual is otherwise unimplemented 鈫?abstract class). Called by
+    /// CtEventLoop::exec during drain (搂7.11 濂戠害 #2, friend access).
     void dispatchAny(CtPendingEventBase& pending) override;
 };
 
 } // namespace crisp::event
 ```
 
-**语义契约**：
-
-1. **类型域闭合**：`EventSet` 必须是 `CtEventSet<Ts...>`。**所有公开模板成员**（`addHandler/addFilter/addObserver/send/broadcast/post/postTo`）开头 `static_assert(EventSet::template contains<T>, "T is not a member of the dispatcher's event set")`——注册与投递超出集合即编译失败。**这是"杜绝再 cast"的编译期防线**（§6.3、§7.4、§8.2 三重保证）。
-2. **COW 表 + 原子快照（§6.5, Rev 2 P1-3/P2-7）**：`m_tables` 是**普通** `std::shared_ptr<const CtDispatchTables>`（**不是** `std::atomic<shared_ptr>`——那是 C++20 P0718，C++17 非法且与 `std::atomic_load` 语义矛盾）；读写一律经 `std::atomic_load(&m_tables)` / `std::atomic_store(&m_tables, ptr)`。分发入口取一次快照，全程只读。**如实声明**：C++17 的 `std::atomic_load(shared_ptr)` 在 libstdc++/MSVC 内部各有锁，因此读入口是"一次标准库内部锁（低竞争）+ 无写路径互斥"，非字面零锁；M4 换 C++20 `std::atomic<shared_ptr>` 或自研原子指针后读入口真零锁（§6.5 声明、§11.1/§11.2 预算表已按此修正）。写路径（注册/注销）持 `m_writeMutex` 拷贝-修改-发布。
-3. **管线顺序（固定）**：`observers(pre) → filters → handlers → observers(post)`。过滤器任一返回 true 即拦截（`kFiltered`，后续全不执行）；handlers 按注册序逐一向目标 receiver 投递；`observers(post)` 在 handlers 之后执行**且不改变结果**。管线各步的 trace 相位见 §7.9。
-4. **`addHandler<T>` 与接收者**：接收者必须由 `shared_ptr` 持有（§7.5）。表内存 `weak_ptr<CtReceiver>`——接收者销毁后该条目在下次 COW 写时被回收（或分发时按 `lock()` 失败跳过，二选一由 §8.2 定）。`name` 只进 trace。
-5. **`send<T>` 同线程断言**：`send` 只能在"接收者归属线程"被调用；否则触发 `assert`（debug）或返回 `kUnhandled`（release，§8.1 Step 1 归属规则）。**编码子agent 注意**：跨线程投递请用 `post/postTo`，不是 `send`——命名即语义（继承约束 #3）。
-6. **`CtHandlerToken` 由 addXxx 返回**：注册即 RAII；析构 token 经 `CtDispatcherBase::unregisterHandler(id)` 走 COW 注销（`m_writeMutex` 保护）。dispatcher 析构时持 `m_writeMutex` 翻转所有 `CtTokenState::alive` 并清空 `owner`（§9.2 契约 #1）。
-7. **`CtObserver<T>`（Rev 2, P2-9）**：`addObserver` 参数即 §5.2 定义的 `CtObserver<T>` = `std::function<void(const CtEvent<T>&, const CtDispatchContext&)>`——**两参版本**（v0 的 `(const CtEvent<T>&, CtTracePhase)` 升级为携带 `CtDispatchContext`，§7.6），保持纯只读。
-8. **异步入口为 M2 占位（Rev 3, N1 修正）**：`post/postTo` 在 M1 可返回 `kUnhandled` 占位（**不记录 `kQueued` 相位**——post 侧可能运行于任意线程，不能触碰归属线程独占的 `CtTrace`，见 §10.1 契约 #4/N1）；完整语义见 §10。**接口签名现在定死**，避免 M2 破坏 ABI/API。异步相位（`kQueued/kDropped`）一律由**归属线程**在排空/溢出处理时记录（§7.10 契约 #6、§7.11 契约 #2）。
-9. **`trace()` 同名隐藏注明（Rev 5, P3-② 落正文）**：`CtDispatcherBase::trace()`（非 const，返回 `CtTrace&`）与 `CtDispatcher<EventSet>::trace() const`（返回 `const CtTrace&`）同名——派生类 const 版本**隐藏**基类非 const 版本，属预期（应用代码只能拿到 const 视图；内部实现用基类非 const 版本）。实现侧不得在 `CtDispatcher` 中再声明非 const `trace()`（避免重载歧义）。
-
-### 7.9 CtTrace（ct_trace.h，保留+修改）
-
-**职责**：每线程一个的**无锁、零堆分配**环形缓冲 trace 存储（可观测性内置，默认开启）。记录每个事件在分发管线中的每一步（相位、接收者、过滤器序号、耗时），供调试、测试与性能观测。
-
-**精确签名**：
-
+**璇箟濂戠害**锛?
+1. **绫诲瀷鍩熼棴鍚?*锛歚EventSet` 蹇呴』鏄?`CtEventSet<Ts...>`銆?*鎵€鏈夊叕寮€妯℃澘鎴愬憳**锛坄addHandler/addFilter/addObserver/send/broadcast/post/postTo`锛夊紑澶?`static_assert(EventSet::template contains<T>, "T is not a member of the dispatcher's event set")`鈥斺€旀敞鍐屼笌鎶曢€掕秴鍑洪泦鍚堝嵆缂栬瘧澶辫触銆?*杩欐槸"鏉滅粷鍐?cast"鐨勭紪璇戞湡闃茬嚎**锛埪?.3銆伮?.4銆伮?.2 涓夐噸淇濊瘉锛夈€?2. **COW 琛?+ 鍘熷瓙蹇収锛埪?.5, Rev 2 P1-3/P2-7锛?*锛歚m_tables` 鏄?*鏅€?* `std::shared_ptr<const CtDispatchTables>`锛?*涓嶆槸** `std::atomic<shared_ptr>`鈥斺€旈偅鏄?C++20 P0718锛孋++17 闈炴硶涓斾笌 `std::atomic_load` 璇箟鐭涚浘锛夛紱璇诲啓涓€寰嬬粡 `std::atomic_load(&m_tables)` / `std::atomic_store(&m_tables, ptr)`銆傚垎鍙戝叆鍙ｅ彇涓€娆″揩鐓э紝鍏ㄧ▼鍙銆?*濡傚疄澹版槑**锛欳++17 鐨?`std::atomic_load(shared_ptr)` 鍦?libstdc++/MSVC 鍐呴儴鍚勬湁閿侊紝鍥犳璇诲叆鍙ｆ槸"涓€娆℃爣鍑嗗簱鍐呴儴閿侊紙浣庣珵浜夛級+ 鏃犲啓璺緞浜掓枼"锛岄潪瀛楅潰闆堕攣锛汳4 鎹?C++20 `std::atomic<shared_ptr>` 鎴栬嚜鐮斿師瀛愭寚閽堝悗璇诲叆鍙ｇ湡闆堕攣锛埪?.5 澹版槑銆伮?1.1/搂11.2 棰勭畻琛ㄥ凡鎸夋淇锛夈€傚啓璺緞锛堟敞鍐?娉ㄩ攢锛夋寔 `m_writeMutex` 鎷疯礉-淇敼-鍙戝竷銆?3. **绠＄嚎椤哄簭锛堝浐瀹氾級**锛歚observers(pre) 鈫?filters 鈫?handlers 鈫?observers(post)`銆傝繃婊ゅ櫒浠讳竴杩斿洖 true 鍗虫嫤鎴紙`kFiltered`锛屽悗缁叏涓嶆墽琛岋級锛沨andlers 鎸夋敞鍐屽簭閫愪竴鍚戠洰鏍?receiver 鎶曢€掞紱`observers(post)` 鍦?handlers 涔嬪悗鎵ц**涓斾笉鏀瑰彉缁撴灉**銆傜绾垮悇姝ョ殑 trace 鐩镐綅瑙?搂7.9銆?4. **`addHandler<T>` 涓庢帴鏀惰€?*锛氭帴鏀惰€呭繀椤荤敱 `shared_ptr` 鎸佹湁锛埪?.5锛夈€傝〃鍐呭瓨 `weak_ptr<CtReceiver>`鈥斺€旀帴鏀惰€呴攢姣佸悗璇ユ潯鐩湪涓嬫 COW 鍐欐椂琚洖鏀讹紙鎴栧垎鍙戞椂鎸?`lock()` 澶辫触璺宠繃锛屼簩閫変竴鐢?搂8.2 瀹氾級銆俙name` 鍙繘 trace銆?5. **`send<T>` 鍚岀嚎绋嬫柇瑷€**锛歚send` 鍙兘鍦?鎺ユ敹鑰呭綊灞炵嚎绋?琚皟鐢紱鍚﹀垯瑙﹀彂 `assert`锛坉ebug锛夋垨杩斿洖 `kUnhandled`锛坮elease锛屄?.1 Step 1 褰掑睘瑙勫垯锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氳法绾跨▼鎶曢€掕鐢?`post/postTo`锛屼笉鏄?`send`鈥斺€斿懡鍚嶅嵆璇箟锛堢户鎵跨害鏉?#3锛夈€?6. **`CtHandlerToken` 鐢?addXxx 杩斿洖**锛氭敞鍐屽嵆 RAII锛涙瀽鏋?token 缁?`CtDispatcherBase::unregisterHandler(id)` 璧?COW 娉ㄩ攢锛坄m_writeMutex` 淇濇姢锛夈€俤ispatcher 鏋愭瀯鏃舵寔 `m_writeMutex` 缈昏浆鎵€鏈?`CtTokenState::alive` 骞舵竻绌?`owner`锛埪?.2 濂戠害 #1锛夈€?7. **`CtObserver<T>`锛圧ev 2, P2-9锛?*锛歚addObserver` 鍙傛暟鍗?搂5.2 瀹氫箟鐨?`CtObserver<T>` = `std::function<void(const CtEvent<T>&, const CtDispatchContext&)>`鈥斺€?*涓ゅ弬鐗堟湰**锛坴0 鐨?`(const CtEvent<T>&, CtTracePhase)` 鍗囩骇涓烘惡甯?`CtDispatchContext`锛屄?.6锛夛紝淇濇寔绾彧璇汇€?8. **寮傛鍏ュ彛涓?M2 鍗犱綅锛圧ev 3, N1 淇锛?*锛歚post/postTo` 鍦?M1 鍙繑鍥?`kUnhandled` 鍗犱綅锛?*涓嶈褰?`kQueued` 鐩镐綅**鈥斺€攑ost 渚у彲鑳借繍琛屼簬浠绘剰绾跨▼锛屼笉鑳借Е纰板綊灞炵嚎绋嬬嫭鍗犵殑 `CtTrace`锛岃 搂10.1 濂戠害 #4/N1锛夛紱瀹屾暣璇箟瑙?搂10銆?*鎺ュ彛绛惧悕鐜板湪瀹氭**锛岄伩鍏?M2 鐮村潖 ABI/API銆傚紓姝ョ浉浣嶏紙`kQueued/kDropped`锛変竴寰嬬敱**褰掑睘绾跨▼**鍦ㄦ帓绌?婧㈠嚭澶勭悊鏃惰褰曪紙搂7.10 濂戠害 #6銆伮?.11 濂戠害 #2锛夈€?9. **`trace()` 鍚屽悕闅愯棌娉ㄦ槑锛圧ev 5, P3-鈶?钀芥鏂囷級**锛歚CtDispatcherBase::trace()`锛堥潪 const锛岃繑鍥?`CtTrace&`锛変笌 `CtDispatcher<EventSet>::trace() const`锛堣繑鍥?`const CtTrace&`锛夊悓鍚嶁€斺€旀淳鐢熺被 const 鐗堟湰**闅愯棌**鍩虹被闈?const 鐗堟湰锛屽睘棰勬湡锛堝簲鐢ㄤ唬鐮佸彧鑳芥嬁鍒?const 瑙嗗浘锛涘唴閮ㄥ疄鐜扮敤鍩虹被闈?const 鐗堟湰锛夈€傚疄鐜颁晶涓嶅緱鍦?`CtDispatcher` 涓啀澹版槑闈?const `trace()`锛堥伩鍏嶉噸杞芥涔夛級銆?
+### 7.9 CtTrace锛坈t_trace.h锛屼繚鐣?淇敼锛?
+**鑱岃矗**锛氭瘡绾跨▼涓€涓殑**鏃犻攣銆侀浂鍫嗗垎閰?*鐜舰缂撳啿 trace 瀛樺偍锛堝彲瑙傛祴鎬у唴缃紝榛樿寮€鍚級銆傝褰曟瘡涓簨浠跺湪鍒嗗彂绠＄嚎涓殑姣忎竴姝ワ紙鐩镐綅銆佹帴鏀惰€呫€佽繃婊ゅ櫒搴忓彿銆佽€楁椂锛夛紝渚涜皟璇曘€佹祴璇曚笌鎬ц兘瑙傛祴銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_trace.h（保留+修改；v0 移除项不再列出）
+// ct_trace.h锛堜繚鐣?淇敼锛泇0 绉婚櫎椤逛笉鍐嶅垪鍑猴級
 #pragma once
 #include <atomic>
 #include <chrono>
@@ -1697,12 +1388,12 @@ private:
 
 namespace crisp::event {
 
-// (Rev 7, P1-3) CtTracePhase now lives in ct_event.h (see §7.3) — both
+// (Rev 7, P1-3) CtTracePhase now lives in ct_event.h (see 搂7.3) 鈥?both
 // ct_dispatch_context.h and this header consume it from there, breaking the
 // circular include (ctx -> event, trace -> ctx -> event; no trace <-> ctx).
 
 /// A single trace record: one step of an event's journey.
-/// Strings are compile-time names + numeric ids only — hot path stays
+/// Strings are compile-time names + numeric ids only 鈥?hot path stays
 /// allocation-free. `context` is a full snapshot of the dispatch context
 /// (phase, receiverId, filterIndex, elapsed) for rich post-hoc analysis.
 struct CtTraceRecord {
@@ -1710,29 +1401,29 @@ struct CtTraceRecord {
     std::string_view typeName{};      ///< compile-time name of the payload type
     CtTracePhase phase{CtTracePhase::kDispatched};
     uint64_t objectId = 0;            ///< receiver objectId (0 = none)
-    uint64_t sequence = 0;            ///< dispatcher-assigned sequence (§8.2)
+    uint64_t sequence = 0;            ///< dispatcher-assigned sequence (搂8.2)
     CtDispatchContext context;        ///< full read-only context snapshot
 };
 
 /// Per-thread, fixed-capacity ring buffer (lock-free writes, Rev 2 P1-4).
 /// SINGLE producer AND SINGLE consumer: the OWNING thread of the
-/// CtEventLoop/dispatcher — it is the only thread that may call record(),
+/// CtEventLoop/dispatcher 鈥?it is the only thread that may call record(),
 /// dump() or clear(). All other threads MUST NOT touch this object.
 /// Cross-thread observability is NOT provided by CtTrace itself; it is
 /// provided by CtDispatcher's trace() being called from the owning thread
-/// only (see §9.2 / §11.4 — the dispatcher is single-threaded by design).
+/// only (see 搂9.2 / 搂11.4 鈥?the dispatcher is single-threaded by design).
 class CtTrace {
 public:
     static constexpr std::size_t kCapacity = 4096;   ///< power of two (ring)
 
     /// Record one dispatch step (hot path, zero allocation, no locks).
     /// Calling thread MUST be the owning thread (contract #1).
-    /// `typeName` is the compile-time payload name on the SYNC path (§8.1);
+    /// `typeName` is the compile-time payload name on the SYNC path (搂8.1);
     /// on the ASYNC path (queue trace) the caller passes a fixed placeholder
-    /// "<async>" — §7.10 契约 #6 / Rev 10 P3 / Rev 11 P3.
+    /// "<async>" 鈥?搂7.10 濂戠害 #6 / Rev 10 P3 / Rev 11 P3.
     /// (Rev 11, P3) `objectId` is a convenience copy of ctx.receiverId()
     /// (kept for v0-compatible dump output; the source of truth is
-    /// ctx.receiverId() — implementers MAY drop the parameter and read the
+    /// ctx.receiverId() 鈥?implementers MAY drop the parameter and read the
     /// field from ctx; the signature above is the sanctioned form).
     void record(std::string_view typeName, CtTracePhase phase,
                 CtDispatchContext ctx, uint64_t objectId);
@@ -1746,7 +1437,7 @@ public:
     std::size_t count() const noexcept;
 
     /// Dump retained records in chronological order (debugging).
-    /// Same ownership contract as record() — NO locks, NO extra
+    /// Same ownership contract as record() 鈥?NO locks, NO extra
     /// synchronization (Rev 2, P1-4: "dump: locks" removed).
     void dump() const;
 
@@ -1760,7 +1451,7 @@ private:
     //   - m_head:  store with std::memory_order_release, load with
     //     std::memory_order_acquire (writer publishes the slot contents
     //     before advancing the head; the same thread re-reads with
-    //     acquire so it observes its own prior stores — no data race);
+    //     acquire so it observes its own prior stores 鈥?no data race);
     //   - m_count: std::memory_order_seq_cst (diagnostics only; cheap).
     // No other thread ever reads or writes these fields, so no further
     // synchronization is needed.
@@ -1772,31 +1463,15 @@ private:
 } // namespace crisp::event
 ```
 
-**语义契约（Rev 2, P1-4 收紧）**：
+**璇箟濂戠害锛圧ev 2, P1-4 鏀剁揣锛?*锛?
+1. **鍗曠敓浜ц€?+ 鍗曟秷璐硅€?*锛歚CtTrace` 鏄?*涓ユ牸鍗曠嚎绋嬪璞?*鈥斺€斿彧鏈夊綊灞炵嚎绋嬶紙`CtEventLoop`/dispatcher 鐨勫垱寤虹嚎绋嬶級鍙互璋冪敤 `record/dump/clear/sequence/count`銆?*涓嶅瓨鍦?浠绘剰绾跨▼璇昏€?**锛氳法绾跨▼璇?trace 鏄?data race锛堣渚у湪鐜弧鏃朵細瑕嗙洊鏈秷璐规Ы浣嶏級锛屽洜姝?*濂戠害寮哄埗鎵€鏈夎锛堝惈 dump/clear锛変篃鍦ㄥ綊灞炵嚎绋?*銆傛兂瑕佽法绾跨▼瑙傛祴锛岀敱褰掑睘绾跨▼鎶?trace 鏁版嵁**澶嶅埗**鍒扮嚎绋嬪畨鍏ㄧ殑涓粙锛堝鏃ュ織/娴嬭瘯鏀堕泦鍣級鈥斺€擿CtTrace` 鑷韩涓嶅仛銆傚啓璺緞闆堕攣闆跺垎閰嶏紙缁ф壙绾︽潫 #4/#5锛夛紱dump/clear 涔熶笉鍔犻攣锛堝崟绾跨▼鍐呮棤闇€閿侊級鈥斺€?*"dump: locks"琛ㄨ堪宸插垹闄?*銆?2. **`CtTracePhase` 鎵╁睍**锛氭柊澧?`kQueued`锛堝叆闃熸垚鍔燂級涓?`kDropped`锛堟孩鍑?鎺ユ敹鑰呭凡浜¤涓㈠純锛変袱涓?*寮傛鐩镐綅**锛岃 trace 瀹屾暣瑕嗙洊寮傛璺緞鈥斺€旇繖鏄?v0 缂哄け鐨勮娴嬬淮搴︼紙搂3 璇勪及"鐩镐綅缂哄け寮傛璺緞"鐨勮惤鍦帮級銆?3. **闆跺垎閰?*锛歚typeName` 鏄紪璇戞湡瀛楃涓茶鍥撅紙`CtEventTraits<T>::name`锛夛紱`ctx` 鏄€煎揩鐓э紙鏃犲爢鎴愬憳锛夛紱妲戒綅鍥哄畾鏁扮粍銆?*`record()` 涓嶅緱鍒嗛厤銆佷笉寰楀姞閿?*銆?4. **榛樿寮€鍚?*锛氭棤寮€鍏斥€斺€斿彲瑙傛祴鎬у唴缃紙缁ф壙绾︽潫 #2锛夈€傝嫢鏈潵闇€瑕佸叧闂紙M4 鎬ц兘鍓栨瀽锛夛紝鍙厑璁告暣浣撶紪璇戝畯 `CRISP_TRACE_DISABLED`锛堝畯鍓嶇紑瑙?`AGENTS.md`锛夛紝涓嶅緱鎸夋寮€鍏炽€?5. **瀹归噺**锛歚kCapacity = 4096`锛? 鐨勫箓锛岀幆鎺╃爜鐢?`&` 杩愮畻锛夈€傛孩鍑鸿鐩栨渶鏃ц褰曪紱`sequence()` 鍗曡皟閫掑锛?4 浣嶄笉鍥炵粫锛夛紝渚涙祴璇曟柇瑷€"鑷冲皯浜х敓 N 鏉?銆?6. **鍐呭瓨搴忥紙Rev 2, P2-11锛?*锛歚m_head` 鍐欑敤 `release`銆佽鐢?`acquire`锛堝啓鑰呭厛鍐欐Ы浣嶅唴瀹广€佸悗 release 鎺ㄨ繘 head锛岀‘淇濇Ы浣嶅唴瀹瑰鑷韩鍚庣画 acquire 璇诲彲瑙佲€斺€斿崟绾跨▼鍐呮湰鏃犳暟鎹珵浜夛紝姝ゅ０鏄庤瀹炵幇涓嶄緷璧栭粯璁?seq_cst 涓旈槻姝㈡湭鏉ヨ鐢級锛沗m_count` 鐢?`seq_cst`锛堜粎璇婃柇锛屽粔浠凤級銆傚疄鐜颁笉寰楃渷鐣ユ樉寮忓唴瀛樺簭鍙傛暟锛堥粯璁?seq_cst 鍙敤浣嗘€ц兘杈冨樊锛屼笖涓庢湰濂戠害涓嶇锛夈€?7. **`dump/clear`**锛氳皟璇曠敤閫旓紝**涓嶅姞閿併€佷笉鍒嗛厤**锛堝崟绾跨▼鐙崰锛夛紱`dump` 杈撳嚭鏍煎紡娌跨敤 v0锛坄phase/objectId/sequence`锛夊苟杩藉姞鑰楁椂涓庤繃婊ゅ櫒搴忓彿銆?
+**涓?v0 鐨勫樊寮?*锛?- 鐩镐綅浠?4 涓?鈫?6 涓紙+`kQueued/kDropped`锛夈€?- `record()` 绛惧悕浠?`(name, phase, objectId, accepted)` 鍗囩骇涓烘惡甯?`CtDispatchContext`锛堝惈鑰楁椂銆佽繃婊ゅ櫒搴忓彿銆乭andler 鏁帮級鈥斺€旇娴嬩俊鎭ぇ骞呬赴瀵岋紝鎴愭湰涓嶅彉銆?- 绉婚櫎 `std::mutex`锛坴0 姣忔鍔犻攣锛夆啋 鏃犻攣鍗曠敓浜ц€呯幆銆?- **锛圧ev 2锛夎鍐欑嚎绋嬪绾︿粠"鍗曠敓浜ц€呬换鎰忚鑰?鏀剁揣涓?涓ユ牸鍗曠嚎绋?**鈥斺€旀秷闄?data race锛涜法绾跨▼瑙傛祴鐢卞綊灞炵嚎绋嬪鍒跺埌澶栭儴涓粙鎵挎媴銆?- 瀹归噺 1024 鈫?4096锛沗accepted` 鏍囧織绉诲叆 `CtDispatchContext` 鐨勮涔夛紙鐢辩粨鏋滄灇涓捐〃杈撅級銆?
+### 7.10 CtQueue<EventSet>锛坈t_queue.h锛屾柊澧烇級
 
-1. **单生产者 + 单消费者**：`CtTrace` 是**严格单线程对象**——只有归属线程（`CtEventLoop`/dispatcher 的创建线程）可以调用 `record/dump/clear/sequence/count`。**不存在"任意线程读者"**：跨线程读 trace 是 data race（读侧在环满时会覆盖未消费槽位），因此**契约强制所有读（含 dump/clear）也在归属线程**。想要跨线程观测，由归属线程把 trace 数据**复制**到线程安全的中介（如日志/测试收集器）——`CtTrace` 自身不做。写路径零锁零分配（继承约束 #4/#5）；dump/clear 也不加锁（单线程内无需锁）——**"dump: locks"表述已删除**。
-2. **`CtTracePhase` 扩展**：新增 `kQueued`（入队成功）与 `kDropped`（溢出/接收者已亡被丢弃）两个**异步相位**，让 trace 完整覆盖异步路径——这是 v0 缺失的观测维度（§3 评估"相位缺失异步路径"的落地）。
-3. **零分配**：`typeName` 是编译期字符串视图（`CtEventTraits<T>::name`）；`ctx` 是值快照（无堆成员）；槽位固定数组。**`record()` 不得分配、不得加锁**。
-4. **默认开启**：无开关——可观测性内置（继承约束 #2）。若未来需要关闭（M4 性能剖析），只允许整体编译宏 `CRISP_TRACE_DISABLED`（宏前缀见 `AGENTS.md`），不得按次开关。
-5. **容量**：`kCapacity = 4096`（2 的幂，环掩码用 `&` 运算）。溢出覆盖最旧记录；`sequence()` 单调递增（64 位不回绕），供测试断言"至少产生 N 条"。
-6. **内存序（Rev 2, P2-11）**：`m_head` 写用 `release`、读用 `acquire`（写者先写槽位内容、后 release 推进 head，确保槽位内容对自身后续 acquire 读可见——单线程内本无数据竞争，此声明让实现不依赖默认 seq_cst 且防止未来误用）；`m_count` 用 `seq_cst`（仅诊断，廉价）。实现不得省略显式内存序参数（默认 seq_cst 可用但性能较差，且与本契约不符）。
-7. **`dump/clear`**：调试用途，**不加锁、不分配**（单线程独占）；`dump` 输出格式沿用 v0（`phase/objectId/sequence`）并追加耗时与过滤器序号。
-
-**与 v0 的差异**：
-- 相位从 4 个 → 6 个（+`kQueued/kDropped`）。
-- `record()` 签名从 `(name, phase, objectId, accepted)` 升级为携带 `CtDispatchContext`（含耗时、过滤器序号、handler 数）——观测信息大幅丰富，成本不变。
-- 移除 `std::mutex`（v0 每步加锁）→ 无锁单生产者环。
-- **（Rev 2）读写线程契约从"单生产者任意读者"收紧为"严格单线程"**——消除 data race；跨线程观测由归属线程复制到外部中介承担。
-- 容量 1024 → 4096；`accepted` 标志移入 `CtDispatchContext` 的语义（由结果枚举表达）。
-
-### 7.10 CtQueue<EventSet>（ct_queue.h，新增）
-
-**职责**：每线程一个的**有序事件队列**（M2 异步核心的存储）。持有待投递的 `CtAnyEvent`（值语义 variant，零堆分配），由归属线程的 `CtEventLoop` 排空。跨线程入队由队列自身加锁（**入队是异步路径，允许锁**）；出队（排空）只在归属线程进行。
-
-**精确签名**：
-
+**鑱岃矗**锛氭瘡绾跨▼涓€涓殑**鏈夊簭浜嬩欢闃熷垪**锛圡2 寮傛鏍稿績鐨勫瓨鍌級銆傛寔鏈夊緟鎶曢€掔殑 `CtAnyEvent`锛堝€艰涔?variant锛岄浂鍫嗗垎閰嶏級锛岀敱褰掑睘绾跨▼鐨?`CtEventLoop` 鎺掔┖銆傝法绾跨▼鍏ラ槦鐢遍槦鍒楄嚜韬姞閿侊紙**鍏ラ槦鏄紓姝ヨ矾寰勶紝鍏佽閿?*锛夛紱鍑洪槦锛堟帓绌猴級鍙湪褰掑睘绾跨▼杩涜銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_queue.h（新增）
+// ct_queue.h锛堟柊澧烇級
 #pragma once
 #include <cstdint>
 #include <deque>
@@ -1813,47 +1488,47 @@ namespace crisp::event {
 
 /// Base of a pending (asynchronously queued) event: common delivery fields.
 /// ABSTRACT base used ONLY via reference semantics (never stored by value;
-/// the boundary is reference/pointer, §7.10 契约 #7 — Rev 5, N-9 wording
+/// the boundary is reference/pointer, 搂7.10 濂戠害 #7 鈥?Rev 5, N-9 wording
 /// fixed: it IS abstract, via pure virtual payloadTypeKey/payloadPtr).
 /// CtPendingEvent<EventSet> (below) derives from it and is stored BY VALUE
 /// in the deque; the loop and dispatcher hold `CtPendingEventBase&`/`*`
-/// (base subobject of a live deque element — no slicing, no heap, no copy).
+/// (base subobject of a live deque element 鈥?no slicing, no heap, no copy).
 class CtPendingEventBase {
 public:
     virtual ~CtPendingEventBase() = default;
 
-    /// Delivery target; null = broadcast (§8.2).
+    /// Delivery target; null = broadcast (搂8.2).
     const std::weak_ptr<CtReceiver>& target() const noexcept { return m_target; }
 
-    /// True if this is a broadcast (target was EMPTY at push time; §8.2).
-    /// (Rev 6, P1-1) FIXED AT CONSTRUCTION — NOT a live expired() check
+    /// True if this is a broadcast (target was EMPTY at push time; 搂8.2).
+    /// (Rev 6, P1-1) FIXED AT CONSTRUCTION 鈥?NOT a live expired() check
     /// (empty and expired weak_ptrs both report expired()==true, so a live
     /// check cannot distinguish "broadcast, must deliver" from "target died,
     /// skip + kDropped"). CtPendingEvent's ctor sets it from the pushed
-    /// target's emptiness (Rev 7, P1-2: `!empty.owner_before(target)` — the
+    /// target's emptiness (Rev 7, P1-2: `!empty.owner_before(target)` 鈥?the
     /// default weak_ptr is the SWO minimum, so empty.owner_before(target) is
     /// true iff target is NON-empty; the reverse direction is always false).
     bool isBroadcast() const noexcept { return m_isBroadcast; }
 
-    /// Ordering hint copied from CtEvent::priority() at push time — the
-    /// event's uint64_t priority (§7.3), NOT CtHandlerPriority (Rev 5, N-4:
-    /// CtHandlerPriority is a filter-ordering key only, §7.15).
+    /// Ordering hint copied from CtEvent::priority() at push time 鈥?the
+    /// event's uint64_t priority (搂7.3), NOT CtHandlerPriority (Rev 5, N-4:
+    /// CtHandlerPriority is a filter-ordering key only, 搂7.15).
     uint64_t priority() const noexcept { return m_priority; }
 
-    /// Sequence number — SINGLE source of truth (Rev 8, P2-1): copied from
+    /// Sequence number 鈥?SINGLE source of truth (Rev 8, P2-1): copied from
     /// CtEvent::sequence() at PUSH time (enqueue order). CtQueue<EventSet> is
-    /// a CtEvent friend (§7.3) and calls setSequence() on the event before
-    /// constructing the pending record. Sync path (§8.1 Step 3) assigns the
+    /// a CtEvent friend (搂7.3) and calls setSequence() on the event before
+    /// constructing the pending record. Sync path (搂8.1 Step 3) assigns the
     /// same field on the event directly. Async events are NOT re-assigned at
-    /// drain — the trace sequence matches what was stamped at enqueue.
+    /// drain 鈥?the trace sequence matches what was stamped at enqueue.
     uint64_t sequence() const noexcept { return m_sequence; }
 
     /// EventSet identity of the queue that CREATED this pending event
-    /// (Rev 8, P2-4: address-derived, §6.1). The drain side (dispatchAny)
+    /// (Rev 8, P2-4: address-derived, 搂6.1). The drain side (dispatchAny)
     /// asserts this == ITS OWN set id BEFORE static_casting the payload to
-    /// its variant type — a payloadTypeKey() check alone cannot detect a
+    /// its variant type 鈥?a payloadTypeKey() check alone cannot detect a
     /// cross-set pending record when two sets share type T (cast would be
-    /// UB). Same discipline as CtAnyEventHolder::eventSetId() (§6.5).
+    /// UB). Same discipline as CtAnyEventHolder::eventSetId() (搂6.5).
     virtual uint64_t eventSetId() const noexcept = 0;
 
     /// CtTypeKey of the payload T (for the dispatcher's set-membership assert).
@@ -1861,17 +1536,17 @@ public:
 
     /// Pointer to the concrete CtAnyEvent (variant) inside the deque element.
     /// The templated CtDispatcher<EventSet> static_casts this to its known
-    /// variant type AFTER asserting payloadTypeKey() ∈ EventSet — the SAME
-    /// disciplined cast as §6.5 erased handlers (never called otherwise).
+    /// variant type AFTER asserting payloadTypeKey() 鈭?EventSet 鈥?the SAME
+    /// disciplined cast as 搂6.5 erased handlers (never called otherwise).
     /// (Rev 11, P2-2 + Rev 12, P1-1) NON-const return AND non-const member
-    /// function: dispatchAny runs the §8.1 pipeline which resets accepted
-    /// (Step 3) and passes non-const CtEvent<T>& to handlers/filters (§5.2).
+    /// function: dispatchAny runs the 搂8.1 pipeline which resets accepted
+    /// (Step 3) and passes non-const CtEvent<T>& to handlers/filters (搂5.2).
     virtual void* payloadPtr() noexcept = 0;
 
 protected:
-    std::weak_ptr<CtReceiver> m_target;      ///< null = broadcast (§8.2)
+    std::weak_ptr<CtReceiver> m_target;      ///< null = broadcast (搂8.2)
     bool m_isBroadcast = false;              ///< fixed at construction (Rev 6, P1-1)
-    uint64_t m_priority = 0;                 ///< event priority hint (§10.3)
+    uint64_t m_priority = 0;                 ///< event priority hint (搂10.3)
     uint64_t m_sequence = 0;                 ///< enqueue-order sequence (Rev 8, P2-1)
 };
 
@@ -1879,7 +1554,7 @@ protected:
 /// target. Concrete subclass stored BY VALUE in the queue (Rev 5, P1-1):
 /// the target is a weak_ptr<CtReceiver> so a destroyed receiver is skipped
 /// at drain time without extending its lifetime; priority/sequence are
-/// copied from the event at push time for deterministic ordering (§10.3).
+/// copied from the event at push time for deterministic ordering (搂10.3).
 template <typename EventSet>
 struct CtPendingEvent : CtPendingEventBase {
     using any_event = typename EventSet::any_type;
@@ -1889,12 +1564,12 @@ struct CtPendingEvent : CtPendingEventBase {
     /// target's emptiness: `m_isBroadcast = !std::weak_ptr<CtReceiver>{}.owner_before(target)`
     /// (default empty weak_ptr is the strict-weak-order minimum, so
     /// empty.owner_before(target) is true iff target is non-empty; the
-    /// reversed expression is ALWAYS false — see §6.5).
+    /// reversed expression is ALWAYS false 鈥?see 搂6.5).
     template <typename T>
     CtPendingEvent(const std::weak_ptr<CtReceiver>& target,
                    CtEvent<T>&& event, uint64_t priority, uint64_t sequence);
 
-    uint64_t eventSetId() const noexcept override;      ///< address-derived key of EventSet (§6.1, Rev 8 P2-4)
+    uint64_t eventSetId() const noexcept override;      ///< address-derived key of EventSet (搂6.1, Rev 8 P2-4)
     uint64_t payloadTypeKey() const noexcept override;  ///< CtTypeKey<T> of payload
     void* payloadPtr() noexcept override;              ///< &m_payload (variant; Rev 11, P2-2 + Rev 12, P1-1 non-const)
 
@@ -1903,7 +1578,7 @@ struct CtPendingEvent : CtPendingEventBase {
 
 /// Type-erased base of CtQueue<EventSet>. Lets CtEventLoop and
 /// CtEventSource hold a queue WITHOUT depending on the concrete EventSet
-/// (Rev 3, N4 / Rev 4, P1-5 / Rev 5, P1-1/P1-2, N-3). All virtual — the hot
+/// (Rev 3, N4 / Rev 4, P1-5 / Rev 5, P1-1/P1-2, N-3). All virtual 鈥?the hot
 /// path (sync dispatch) never touches a queue, so virtual dispatch cost
 /// here is off the hot path. The erased payload is the NON-template
 /// detail::CtAnyEventBase interface (Rev 5, N-3: no bare template name).
@@ -1913,21 +1588,21 @@ public:
 
     /// Push an erased payload (cross-thread safe). Returns false on overflow
     /// (event dropped; reported later via popDropped()). Ownership of
-    /// `payload` transfers to the queue. Async path only — one heap
-    /// allocation for the erased holder is permitted here (§10.1 契约 #5).
+    /// `payload` transfers to the queue. Async path only 鈥?one heap
+    /// allocation for the erased holder is permitted here (搂10.1 濂戠害 #5).
     /// (Rev 10, P1-A) Priority is read from the event INSIDE the holder
-    /// (std::visit → CtEvent<T>::priority()); sequence is stamped by the
-    /// concrete queue's m_seqCounter (契约 #9). No priority parameter — a
+    /// (std::visit 鈫?CtEvent<T>::priority()); sequence is stamped by the
+    /// concrete queue's m_seqCounter (濂戠害 #9). No priority parameter 鈥?a
     /// separate one would be a second authority conflicting with the
-    /// variant's value (§7.3).
+    /// variant's value (搂7.3).
     virtual bool pushAny(std::unique_ptr<detail::CtAnyEventBase> payload,
                          std::weak_ptr<CtReceiver> target) = 0;
 
     /// Peek the front pending event (ONLY on the affinity thread; asserts).
     /// Sets `out` to a pointer to the front deque element's base subobject
     /// and returns true; false when empty. On success RECORDS kQueued in the
-    /// queue's own trace (Rev 5, P2-1: the queue is the record主体 and is a
-    /// CtDispatchContext friend, §7.6 — affinity-thread-only, no data race).
+    /// queue's own trace (Rev 5, P2-1: the queue is the record涓讳綋 and is a
+    /// CtDispatchContext friend, 搂7.6 鈥?affinity-thread-only, no data race).
     virtual bool front(CtPendingEventBase*& out) = 0;
 
     /// Remove the front element (ONLY on the affinity thread; asserts).
@@ -1946,8 +1621,8 @@ public:
     virtual CtThreadId affinityThread() const noexcept = 0;
 
     /// Address-derived identity of this queue's EventSet (Rev 9, P2-1,
-    /// §6.1 scheme). CtEventLoop::injectEvent<EventSet> compares this BEFORE
-    /// downcasting to CtQueue<EventSet>& — the strong-typed push path does
+    /// 搂6.1 scheme). CtEventLoop::injectEvent<EventSet> compares this BEFORE
+    /// downcasting to CtQueue<EventSet>& 鈥?the strong-typed push path does
     /// NOT go through pushAny, so without this accessor a cross-set
     /// downcast would be unchecked UB.
     virtual uint64_t eventSetId() const noexcept = 0;
@@ -1957,8 +1632,8 @@ public:
 };
 
 /// A thread-affined, priority-aware queue of type-safe events (M2 async
-/// core storage). Events are stored as CtPendingEvent<EventSet> — value
-/// semantics, zero heap allocation per stored event (§7.4).
+/// core storage). Events are stored as CtPendingEvent<EventSet> 鈥?value
+/// semantics, zero heap allocation per stored event (搂7.4).
 template <typename EventSet>
 class CtQueue : public CtQueueBase {
 public:
@@ -1974,24 +1649,23 @@ public:
 
     /// Push an event to `target` (cross-thread safe; takes the queue mutex).
     /// Returns TRUE if accepted (queued), FALSE on overflow (dropped).
-    /// NEVER records trace itself (Rev 4, P1-1 — see contract #6).
+    /// NEVER records trace itself (Rev 4, P1-1 鈥?see contract #6).
     template <typename T>
     bool push(const std::weak_ptr<CtReceiver>& target, CtEvent<T>&& event);
 
     /// Erased push (Rev 5, P1-2/N-3 + Rev 10, P1-A): concrete override of
     /// CtQueueBase::pushAny. Asserts eventSetId() == EventSet key (Rev 7,
-    /// P2-5) AND payloadTypeKey() ∈ EventSet, then static_casts the holder to
+    /// P2-5) AND payloadTypeKey() 鈭?EventSet, then static_casts the holder to
     /// detail::CtAnyEventHolder<EventSet> and re-homes its variant into a
     /// pending_event. (Rev 10, P1-A) SEQUENCE SINGLE SOURCE: the sequence is
     /// NOT read from the variant (the sender's CtEvent<T>::sequence() may be
-    /// 0 or a sync-path number) — it is stamped from THIS queue's
-    /// m_seqCounter under m_mutex (契约 #9, enqueue order), written into the
+    /// 0 or a sync-path number) 鈥?it is stamped from THIS queue's
+    /// m_seqCounter under m_mutex (濂戠害 #9, enqueue order), written into the
     /// pending's m_sequence via the CtEvent/CtPendingEvent friend path.
     /// PRIORITY is read from the variant via std::visit (CtEvent<T>::priority(),
-    /// §7.3 — the only source; see Rev 10, P1-A: the separate pushAny
+    /// 搂7.3 鈥?the only source; see Rev 10, P1-A: the separate pushAny
     /// priority parameter has been REMOVED to avoid dual authority).
-    /// One heap allocation (the holder) was already spent by the caller —
-    /// async path.
+    /// One heap allocation (the holder) was already spent by the caller 鈥?    /// async path.
     bool pushAny(std::unique_ptr<detail::CtAnyEventBase> payload,
                  std::weak_ptr<CtReceiver> target) override;
 
@@ -2016,51 +1690,29 @@ public:
     std::size_t popDropped() override;
 
 private:
-    // Priority-aware insertion keeps events ordered by §10.3 rules.
+    // Priority-aware insertion keeps events ordered by 搂10.3 rules.
     std::deque<pending_event> m_events;
     mutable std::mutex m_mutex;
     CtThreadAffinity m_affinity;                 ///< embedded (Rev 4, P2-9)
     std::size_t m_dropped = 0;                   ///< dropped count since last popDropped()
     CtTrace m_trace;                             ///< own trace store (Rev 9, P2-2: front/popDropped record here)
     std::uint64_t m_seqCounter = 0;              ///< enqueue-order counter (Rev 9, P1-1: stamped under m_mutex)
-    static constexpr std::size_t kMaxQueued = 8192;  ///< overflow → dropped
+    static constexpr std::size_t kMaxQueued = 8192;  ///< overflow 鈫?dropped
 };
 
 } // namespace crisp::event
 ```
 
-**语义契约（Rev 2, P1-1 + Rev 4, P1-1/P1-5/P2-8/P2-9 + Rev 5, P1-1/P1-2/P2-1/N-3/N-4/N-5 同步）**：
+**璇箟濂戠害锛圧ev 2, P1-1 + Rev 4, P1-1/P1-5/P2-8/P2-9 + Rev 5, P1-1/P1-2/P2-1/N-3/N-4/N-5 鍚屾锛?*锛?
+1. **姣忕嚎绋嬩竴涓?*锛坄CtEventLoop` 鎸佹湁锛夛細闃熷垪鐨勫綊灞炵嚎绋嬪嵆 `CtEventLoop` 鐨勫綊灞炵嚎绋嬶紙鏋勯€犳椂鐢卞唴宓?`CtThreadAffinity` 璁板綍锛屄?.14锛夈€?*`front/popFront/size/popDropped/trace` 鍙兘鍦ㄥ綊灞炵嚎绋嬭皟鐢?*锛坉ebug 鏂█锛夛紱璺ㄧ嚎绋嬪彧鍏佽 `push`銆?2. **鍊艰涔夊瓨鍌?*锛歚std::deque<pending_event>` 瀛?`CtPendingEvent<EventSet>`锛坄CtAnyEvent` variant + 鐩爣 weak_ptr + priority/sequence锛岄浂鍫嗗垎閰嶏級銆?*寮虹被鍨?`push` 鐩存帴鏋勯€?`CtPendingEvent<EventSet>`锛坢ove 浜嬩欢杩?variant锛屾棤 `std::visit` 闇€瑕侊紝Rev 8, P3 鎺緸绮剧‘鍖栵級**锛沗std::visit` 鍙睘浜?`pushAny`锛堟摝闄よ矾寰勶級鐨?re-home 姝ラ鈥斺€?*鏃?new銆佹棤鎸囬拡 cast**锛堢户鎵跨害鏉?#6锛夈€?3. **鍑洪槦褰㈡€侊紙Rev 5, P1-1 閲嶅畾锛歠ront/popFront 寮曠敤璇箟锛涘璁?MUST-1 琛ヤ竵锛歱opFront 鎸夎韩浠藉垹闄わ級**锛歷0 鐨?`bool pop(any_event& out)` 褰㈡€佽姹?out 鍙粯璁ゆ瀯閫狅紙`CtEvent() = delete` 涓?variant 涓嶅彲榛樿鏋勯€狅級锛屼笖"鎸夊€艰繑鍥炲鎬?鍦ㄧ被鍨嬫摝闄よ竟鐣屼笉鎴愮珛锛堟娊璞″熀绫绘棤娉曟寜鍊煎瓨 `std::optional`锛夈€?*鍥犳鏀?`front(CtPendingEventBase*&)` + `popFront(CtPendingEventBase* which)`**锛?   - `front()` 绌洪槦鍒?鈫?false銆乣out` 涓嶅姩锛涢潪绌?鈫?`out` 鎸囧悜闃熷ご `deque` 鍏冪礌锛坄CtPendingEvent<EventSet>`锛夌殑鍩虹被瀛愬璞♀€斺€?*闆跺爢銆侀浂鎷疯礉銆佹棤鍒囩墖**銆?   - `popFront(which)` 绉婚櫎 `which` 鎸囧悜鐨?*閭ｄ釜**鍏冪礌锛堝綊灞炵嚎绋嬶紝鏃?trace銆佹棤鍒嗛厤锛夈€?*鎸夎韩浠斤紙鍦板潃锛夊垹闄わ紝鑰岄潪鎸変綅缃?*锛歚front()` 涓?`popFront()` 涔嬮棿鍙︿竴绾跨▼鍙兘 push 鏇撮珮浼樺厛绾т簨浠跺苟**鍓嶆彃**鍒?`which` 涔嬪墠锛坉eque 寮曠敤/鎸囬拡绋冲畾鎬ф槸鏍囧噯淇濊瘉鈥斺€旀湭鍒犲厓绱犲湪 push/erase 鍚庝繚鎸佹湁鏁堬級锛涜嫢鎸?褰撳墠闃熷ご"鍒犻櫎浼氳鍒犳柊浜嬩欢銆佹妸宸插垎鍙戜簨浠剁暀鍦ㄩ槦棣栧鑷?*浜屾鍒嗗彂**锛堝璁?MUST-1锛?026-10-11 淇锛夈€?   - **`CtPendingEvent<EventSet>` 缁ф壙 `CtPendingEventBase`**锛埪?.5 杈圭晫绫诲瀷鐨勫叿浣撳寲锛夛細loop/dispatcher 鎸?`CtPendingEventBase&` 璁块棶鍏叡瀛楁锛坄target/priority/sequence/isBroadcast`锛夛紝`dispatchAny` 缁?`payloadTypeKey()` 鏂█鍚?`static_cast` 鍥炲叿浣?variant 鎸囬拡锛埪?.5 绾緥鍖?cast锛屼粎鍦ㄩ敭鍖归厤鍚庤皟鐢級銆?   - 璋冪敤鐐瑰舰鎬侊紙搂7.11 鎺掔┖寰幆涓?搂13.3 鐢ㄤ緥锛夛細`CtPendingEventBase* pe; while (q.front(pe)) { ...; q.popFront(pe); }`鈥斺€?*娉ㄦ剰锛歚front` 鎴愬姛鍚庡繀椤诲厛澶勭悊鍐?`popFront(pe)`**锛堣凯浠ｆ湡 `pe` 鎸囧悜闃熷ご鍏冪礌锛宍popFront(pe)` 鍚庡け鏁堬級銆?4. **閿?*锛歚push` 璺ㄧ嚎绋嬶紝鍙?`m_mutex`锛沗front/popFront` 褰掑睘绾跨▼鐙崰锛圡2 鍒濈増鍚岄攣绠€鍖栵紝M4 鍙檷绾т负鏃犻攣 MPMC鈥斺€斅?1 鎬ц兘绛栫暐锛夈€?*鐑矾寰勶紙鍚屾鍒嗗彂锛変笉缁忚繃闃熷垪**銆俙front` 涓?`popFront` 鍚勫彇涓€娆￠攣锛圡2 鍙悎骞朵负鍗曟涓寸晫鍖猴紝鏂囨。鍏佽瀹炵幇浼樺寲锛岃涔変笉鍙橈級銆?5. **浼樺厛绾т笌婧㈠嚭锛圧ev 12, P3 涓㈠純绛栫暐瑁佸畾 + 瀹¤ WARN 鎺緸淇锛?*锛歚kMaxQueued = 8192` 婧㈠嚭鏃?*涓㈠純闃熷熬**锛堟渶浣庝紭鍏堢骇锛涘悓绾т腑 deque 灏鹃儴 = **seq 鏈€澶?鏈€鏂?*鈥斺€旈槦鍒楁寜"楂樹紭鍏堢骇鍦ㄥ墠銆佸悓绾?seq 鍗囧簭"鎺掑簭锛宍pop_back` 绮剧‘钀藉埌鏈€浣庝紭鍏堢骇娈电殑鏈€鏂板厓绱狅紝鏃犻渶鏃堕棿鎴筹級骞惰鏁帮紙`popDropped()` 鎶ュ憡锛夛紱**`priority` 鏄簨浠剁殑 `uint64_t` 鎺掑簭鎻愮ず锛埪?.3 `CtEvent::priority()`锛夛紝涓嶆槸 `CtHandlerPriority`**锛圧ev 5, N-4锛歚CtHandlerPriority` 浠呬綔杩囨护鍣ㄦ帓搴忛敭锛屄?.15锛夆€斺€擿priority` 褰卞搷鎻掑叆浣嶇疆锛埪?0.3 璇﹁堪鎺掑簭瑙勫垯锛涙彃鍏?= 鎸侀攣鎸?priority 闄嶅簭浜屽垎锛屽悓绾ц拷鍔犲熬閮級銆傛孩鍑鸿鏁扮敱褰掑睘绾跨▼缁?`popDropped()` 鍙栧洖銆?6. **trace 闆嗘垚锛圧ev 4, P1-1 + Rev 5, P2-1 瀹氱锛?*锛?*`push` 姘镐笉璁?trace**锛堝彲杩愯浜庝换鎰忕嚎绋嬶紝`CtTrace` 涓ユ牸鍗曠嚎绋嬶紝搂7.9 濂戠害 #1锛岃Е纰板嵆 data race锛夈€傚紓姝ョ浉浣嶇敱**褰掑睘绾跨▼**缁?`CtQueue` 鑷韩鐨?`CtTrace`锛坄trace()`锛夎褰曪細
+   - `kQueued`锛?*`CtQueue::front()` 鎴愬姛鏃剁敱闃熷垪鑷韩璁板綍**锛坄CtQueue<EventSet>` 鏄?`CtDispatchContext` 鐨?friend锛屄?.6锛沠ront 鍙湪褰掑睘绾跨▼璋冪敤锛屾棤鏁版嵁绔炰簤锛夆€斺€旇褰曚富浣撴槸闃熷垪锛屼笉鏄?loop锛圧ev 5, P2-1 瑁佸畾鏂规 (a)锛夈€?   - `kDropped`锛?*`CtQueue::popDropped()` 鍐呴儴鎸夎繑鍥炶鏁拌褰?*锛堝綊灞炵嚎绋嬶紱婧㈠嚭璁℃暟鍦?push 渚у彧璁℃暟涓嶈 trace锛夈€?*鎺掔┖鏃剁洰鏍囧凡浜＄殑涓㈠純锛坱arget 闈炵┖浣?`lock()` 澶辫触锛夌敱 `dispatchAny` 璁?`kDropped`**锛圧ev 5, N-10锛歚kDropped` 瀹氫箟鍚?expired receiver"锛岃褰曠偣蹇呴』瀛樺湪锛夈€?   - 闃熷垪鐨?trace 涓?dispatcher 鐨?trace 鍒嗙鈥斺€旈槦鍒?trace 涓嶈法绾跨▼銆佷笉杩?dispatcher 鐜€?   - **typeName 鏉ユ簮锛圧ev 9, P3 + Rev 10, P3 钀界偣瀹氭锛汳4 宸茶惤鍦帮級**锛歚CtPendingEventBase` 鍙惡甯︽暟鍊?`payloadTypeKey()`锛堟棤瀛楃涓插悕锛寁ariant 鍐呬簨浠剁殑鍏蜂綋 trait name 闇€ `std::visit` 鎵嶇煡閬擄級鈥斺€?*寮傛鐩镐綅锛坘Queued/kDropped锛夌殑闃熷垪 trace `record()` 璋冪敤浼犲浐瀹氬崰浣?`"<async>"` 浣滀负 typeName**锛埪?3.3 鐢ㄤ緥 #3 涓嶄緷璧栧悕绉帮級锛?*M4 宸茬粰 `CtPendingEventBase` 琛?`virtual std::string_view typeName()`**锛堢粡 visit 鍙?trait name锛夊苟鏇挎崲 `front()` kQueued銆乣dispatchAny` 鐩爣宸蹭骸 kDropped 鐨勫崰浣嶏紙`popDropped()` 婧㈠嚭璁℃暟鏃犲叿浣撲簨浠跺璞★紝浠嶈 `"<async>"`锛夈€?7. **`CtQueueBase` 绫诲瀷鎿﹂櫎锛圧ev 3, N4 / Rev 4, P1-5 / Rev 5, P1-1/P1-2/N-3 淇锛?*锛歚CtEventLoop` 涓?`CtEventSource` 鎸?`CtQueueBase&`/`std::unique_ptr<CtQueueBase>`锛岄伩鍏嶄緷璧栧叿浣?`EventSet`锛埪?.11/搂7.12锛夈€傝竟鐣屾帴鍙ｏ細
+   - `pushAny(std::unique_ptr<detail::CtAnyEventBase>, std::weak_ptr<CtReceiver>)`锛圧ev 10, P1-A锛?*鏃?priority 鍙傛暟**鈥斺€攑riority 浠?variant 鍐呬簨浠惰锛岄伩鍏嶅弻鏉冨▉锛夛細**寮傛璺緞鍏佽涓€娆″爢鍒嗛厤**锛坄detail::CtAnyEventHolder<EventSet>` 鏋勯€狅紝搂6.5锛夆€斺€擿post`/婧愭敞鍏ヤ晶鏋勯€狅紝闃熷垪鎺ョ鎵€鏈夋潈銆?*`detail::CtAnyEventBase` 鏄潪妯℃澘鎺ュ彛**锛圧ev 5, N-3锛夛紝`CtQueue<EventSet>::pushAny` 閿柇瑷€鍚?`static_cast` 鍒?`CtAnyEventHolder<EventSet>`銆傚悓姝ュ垎鍙戠儹璺緞涓嶇粡杩囨鎺ュ彛銆?   - `front/popFront`锛氬紩鐢ㄨ涔夊嚭闃燂紙濂戠害 #3锛夈€?   - `CtPendingEventBase` 鏄?*鎶借薄鍩虹被**锛堢函铏?`payloadTypeKey/payloadPtr`锛夛紝浣?*鍙粡寮曠敤/鎸囬拡浣跨敤**锛圧ev 5, N-9 鎺緸缁熶竴锛夆€斺€擿CtPendingEvent<EventSet>` 缁ф壙瀹冨苟鎸夊€煎瓨 deque锛岄伩鍏?鎶借薄绫诲瀷鎸夊€煎叆 optional"鐨勭紪璇戦敊璇紙Rev 5, P1-1 鏍瑰洜锛夈€?   - **缂栫爜瀛恆gent 娉ㄦ剰**锛氭摝闄や粎鍦ㄩ槦鍒椻啍loop鈫攄ispatcher 杈圭晫鍙戠敓涓€娆★紝鍒嗗彂绠＄嚎鍐呬粛鏄己绫诲瀷锛坄std::visit` 杩樺師锛屄?0.1 濂戠害 #5锛夈€?8. **M2 鍗犱綅**锛歚CtEventLoop` 鎵嶇湡姝ｆ帓绌哄畠锛汳1 涓嶅疄渚嬪寲闃熷垪銆?9. **寮傛 sequence 璁℃暟鍣紙Rev 9, P1-1 瀹氱锛?*锛歚CtQueue` 鎸?**`m_seqCounter`**锛坄uint64_t`锛宍push`/`pushAny` 鎸?`m_mutex` 鏃惰嚜澧炲苟 stamp 杩?pending 鐨?`m_sequence`锛夆€斺€?*鍏ラ槦搴?*鏄紓姝ヤ簨浠?sequence 鐨勫崟涓€浜嬪疄鏉ユ簮銆傚畠涓?dispatcher 鐨勫悓姝ュ崟璋冭鏁帮紙搂8.2锛夋槸**涓や釜鐙珛閿┖闂?*锛堝紓姝ヤ簨浠朵粠涓嶅悓姝ヨ矾寰勯噸璧嬪€硷紝搂8.1 Step 3 寮傛渚嬪锛夈€俙CtEvent::setSequence` 鐨?`CtQueue` friend 閫氶亾鍦ㄦ钀藉湴锛埪?.3锛夈€?
+### 7.11 CtEventLoop锛坈t_event_loop.h锛屾柊澧烇級
 
-1. **每线程一个**（`CtEventLoop` 持有）：队列的归属线程即 `CtEventLoop` 的归属线程（构造时由内嵌 `CtThreadAffinity` 记录，§7.14）。**`front/popFront/size/popDropped/trace` 只能在归属线程调用**（debug 断言）；跨线程只允许 `push`。
-2. **值语义存储**：`std::deque<pending_event>` 存 `CtPendingEvent<EventSet>`（`CtAnyEvent` variant + 目标 weak_ptr + priority/sequence，零堆分配）。**强类型 `push` 直接构造 `CtPendingEvent<EventSet>`（move 事件进 variant，无 `std::visit` 需要，Rev 8, P3 措辞精确化）**；`std::visit` 只属于 `pushAny`（擦除路径）的 re-home 步骤——**无 new、无指针 cast**（继承约束 #6）。
-3. **出队形态（Rev 5, P1-1 重定：front/popFront 引用语义）**：v0 的 `bool pop(any_event& out)` 形态要求 out 可默认构造（`CtEvent() = delete` 下 variant 不可默认构造），且"按值返回多态"在类型擦除边界不成立（抽象基类无法按值存 `std::optional`）。**因此改 `front(CtPendingEventBase*&)` + `popFront()`**：
-   - `front()` 空队列 → false、`out` 不动；非空 → `out` 指向队头 `deque` 元素（`CtPendingEvent<EventSet>`）的基类子对象——**零堆、零拷贝、无切片**。
-   - `popFront()` 移除队头（归属线程，无 trace、无分配）。
-   - **`CtPendingEvent<EventSet>` 继承 `CtPendingEventBase`**（§6.5 边界类型的具体化）：loop/dispatcher 持 `CtPendingEventBase&` 访问公共字段（`target/priority/sequence/isBroadcast`），`dispatchAny` 经 `payloadTypeKey()` 断言后 `static_cast` 回具体 variant 指针（§6.5 纪律化 cast，仅在键匹配后调用）。
-   - 调用点形态（§7.11 排空循环与 §13.3 用例）：`CtPendingEventBase* pe; while (q.front(pe)) { ...; q.popFront(); }`——**注意：`front` 成功后必须先处理再 `popFront`**（迭代期 `pe` 指向队头元素，`popFront` 后失效）。
-4. **锁**：`push` 跨线程，取 `m_mutex`；`front/popFront` 归属线程独占（M2 初版同锁简化，M4 可降级为无锁 MPMC——§11 性能策略）。**热路径（同步分发）不经过队列**。`front` 与 `popFront` 各取一次锁（M2 可合并为单次临界区，文档允许实现优化，语义不变）。
-5. **优先级与溢出（Rev 12, P3 丢弃策略裁定）**：`kMaxQueued = 8192` 溢出时**丢弃队尾**（最低优先级、同级中插入最旧的——deque 尾部，无需时间戳）并计数（`popDropped()` 报告）；**`priority` 是事件的 `uint64_t` 排序提示（§7.3 `CtEvent::priority()`），不是 `CtHandlerPriority`**（Rev 5, N-4：`CtHandlerPriority` 仅作过滤器排序键，§7.15）——`priority` 影响插入位置（§10.3 详述排序规则；插入 = 持锁按 priority 降序二分，同级追加尾部）。溢出计数由归属线程经 `popDropped()` 取回。
-6. **trace 集成（Rev 4, P1-1 + Rev 5, P2-1 定稿）**：**`push` 永不记 trace**（可运行于任意线程，`CtTrace` 严格单线程，§7.9 契约 #1，触碰即 data race）。异步相位由**归属线程**经 `CtQueue` 自身的 `CtTrace`（`trace()`）记录：
-   - `kQueued`：**`CtQueue::front()` 成功时由队列自身记录**（`CtQueue<EventSet>` 是 `CtDispatchContext` 的 friend，§7.6；front 只在归属线程调用，无数据竞争）——记录主体是队列，不是 loop（Rev 5, P2-1 裁定方案 (a)）。
-   - `kDropped`：**`CtQueue::popDropped()` 内部按返回计数记录**（归属线程；溢出计数在 push 侧只计数不记 trace）。**排空时目标已亡的丢弃（target 非空但 `lock()` 失败）由 `dispatchAny` 记 `kDropped`**（Rev 5, N-10：`kDropped` 定义含"expired receiver"，记录点必须存在）。
-   - 队列的 trace 与 dispatcher 的 trace 分离——队列 trace 不跨线程、不进 dispatcher 环。
-   - **typeName 来源（Rev 9, P3 + Rev 10, P3 落点定死）**：`CtPendingEventBase` 只携带数值 `payloadTypeKey()`（无字符串名，variant 内事件的具体 trait name 需 `std::visit` 才知道）——**异步相位（kQueued/kDropped）的队列 trace `record()` 调用传固定占位 `"<async>"` 作为 typeName**（§13.3 用例 #3 不依赖名称）；M4 若需人类可读异步 trace，给 `CtPendingEventBase` 补 `virtual std::string_view typeName()`（经 visit 取 trait name）后替换占位。
-7. **`CtQueueBase` 类型擦除（Rev 3, N4 / Rev 4, P1-5 / Rev 5, P1-1/P1-2/N-3 修正）**：`CtEventLoop` 与 `CtEventSource` 持 `CtQueueBase&`/`std::unique_ptr<CtQueueBase>`，避免依赖具体 `EventSet`（§7.11/§7.12）。边界接口：
-   - `pushAny(std::unique_ptr<detail::CtAnyEventBase>, std::weak_ptr<CtReceiver>)`（Rev 10, P1-A：**无 priority 参数**——priority 从 variant 内事件读，避免双权威）：**异步路径允许一次堆分配**（`detail::CtAnyEventHolder<EventSet>` 构造，§6.5）——`post`/源注入侧构造，队列接管所有权。**`detail::CtAnyEventBase` 是非模板接口**（Rev 5, N-3），`CtQueue<EventSet>::pushAny` 键断言后 `static_cast` 到 `CtAnyEventHolder<EventSet>`。同步分发热路径不经过此接口。
-   - `front/popFront`：引用语义出队（契约 #3）。
-   - `CtPendingEventBase` 是**抽象基类**（纯虚 `payloadTypeKey/payloadPtr`），但**只经引用/指针使用**（Rev 5, N-9 措辞统一）——`CtPendingEvent<EventSet>` 继承它并按值存 deque，避免"抽象类型按值入 optional"的编译错误（Rev 5, P1-1 根因）。
-   - **编码子agent 注意**：擦除仅在队列↔loop↔dispatcher 边界发生一次，分发管线内仍是强类型（`std::visit` 还原，§10.1 契约 #5）。
-8. **M2 占位**：`CtEventLoop` 才真正排空它；M1 不实例化队列。
-9. **异步 sequence 计数器（Rev 9, P1-1 定稿）**：`CtQueue` 持 **`m_seqCounter`**（`uint64_t`，`push`/`pushAny` 持 `m_mutex` 时自增并 stamp 进 pending 的 `m_sequence`）——**入队序**是异步事件 sequence 的单一事实来源。它与 dispatcher 的同步单调计数（§8.2）是**两个独立键空间**（异步事件从不同步路径重赋值，§8.1 Step 3 异步例外）。`CtEvent::setSequence` 的 `CtQueue` friend 通道在此落地（§7.3）。
-
-### 7.11 CtEventLoop（ct_event_loop.h，新增）
-
-**职责**：每线程一个的事件循环——连接"队列"与"分发器"的唯一场所（§4.1 分层规则 #4）。从归属队列弹出事件、按 §8.2 归属规则调 `CtDispatcher::send`，并驱动平台源（定时器等）。Qt 对应物：`QEventLoop` + `QCoreApplication::exec`。
-
-**精确签名**：
-
+**鑱岃矗**锛氭瘡绾跨▼涓€涓殑浜嬩欢寰幆鈥斺€旇繛鎺?闃熷垪"涓?鍒嗗彂鍣?鐨勫敮涓€鍦烘墍锛埪?.1 鍒嗗眰瑙勫垯 #4锛夈€備粠褰掑睘闃熷垪寮瑰嚭浜嬩欢銆佹寜 搂8.2 褰掑睘瑙勫垯璋?`CtDispatcher::send`锛屽苟椹卞姩骞冲彴婧愶紙瀹氭椂鍣ㄧ瓑锛夈€俀t 瀵瑰簲鐗╋細`QEventLoop` + `QCoreApplication::exec`銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_event_loop.h（新增）
+// ct_event_loop.h锛堟柊澧烇級
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -2086,7 +1738,7 @@ public:
 
     /// Attach the dispatcher this loop drains into.
     /// A loop may attach only one dispatcher at a time.
-    /// (Rev 5, P2-3) Lazily creates m_queue (CtQueue<EventSet>) here — the
+    /// (Rev 5, P2-3) Lazily creates m_queue (CtQueue<EventSet>) here 鈥?the
     /// constructor cannot know EventSet.
     template <typename EventSet>
     void setDispatcher(std::shared_ptr<CtDispatcher<EventSet>> dispatcher);
@@ -2102,7 +1754,7 @@ public:
     /// The thread this loop is affined to (set at construction).
     CtThreadId affinityThread() const noexcept;
 
-    /// The queue this loop drains (used by post/postTo, §10).
+    /// The queue this loop drains (used by post/postTo, 搂10).
     CtQueueBase& queue() noexcept;
 
     /// The loop affined to the CURRENT thread, or nullptr if the current
@@ -2115,8 +1767,8 @@ public:
     void attachToCurrentThread();
 
     /// Attach a platform event source to this loop (Rev 8, P2-2). The loop
-    /// owns it (shared_ptr, §11.5); exec() polls all attached sources each
-    /// iteration (§7.12 契约 #3). Thread-affined to the loop's thread.
+    /// owns it (shared_ptr, 搂11.5); exec() polls all attached sources each
+    /// iteration (搂7.12 濂戠害 #3). Thread-affined to the loop's thread.
     /// Returns false if the source is already attached.
     bool attachSource(const std::shared_ptr<CtEventSource>& source);
 
@@ -2124,8 +1776,8 @@ public:
     bool detachSource(const std::shared_ptr<CtEventSource>& source);
 
     /// Template bridge for APPLICATION/BRIDGE-layer manual injection
-    /// (Rev 10, P2-A: demoted — built-in sources are templated and inject
-    /// directly via eventSetId-asserted downcast in poll, §7.12 契约 #6;
+    /// (Rev 10, P2-A: demoted 鈥?built-in sources are templated and inject
+    /// directly via eventSetId-asserted downcast in poll, 搂7.12 濂戠害 #6;
     /// THIS entry serves app code / Qt bridge holding a loop pointer).
     /// Injects a concrete event into THIS loop's queue: asserts
     /// eventSetId() == EventSet key BEFORE the downcast (the strong-typed
@@ -2147,36 +1799,19 @@ private:
 } // namespace crisp::event
 ```
 
-**语义契约（Rev 2, P1-1 + Rev 3, N4 + Rev 4, P1-4/P1-6 + Rev 5, P1-3/P2-1/P2-3/P2-4 同步）**：
-
-1. **每线程一个**：构造时记录创建线程（`m_affinityThread`）。`exec()` 必须在归属线程调用（断言）。Qt 的对等物 `QThread::exec` 是每线程的——我们复刻该模型（§10.2 归属规则）。
-2. **循环体（排空循环形态，Rev 5 更新为 front/popFront + N-5 修正 + Rev 7, P2-4 统一记录主体 + Rev 11, P3 异常路径注）**：`exec()` = 反复：
-   ```
+**璇箟濂戠害锛圧ev 2, P1-1 + Rev 3, N4 + Rev 4, P1-4/P1-6 + Rev 5, P1-3/P2-1/P2-3/P2-4 鍚屾锛?*锛?
+1. **姣忕嚎绋嬩竴涓?*锛氭瀯閫犳椂璁板綍鍒涘缓绾跨▼锛坄m_affinityThread`锛夈€俙exec()` 蹇呴』鍦ㄥ綊灞炵嚎绋嬭皟鐢紙鏂█锛夈€俀t 鐨勫绛夌墿 `QThread::exec` 鏄瘡绾跨▼鐨勨€斺€旀垜浠鍒昏妯″瀷锛埪?0.2 褰掑睘瑙勫垯锛夈€?2. **寰幆浣擄紙鎺掔┖寰幆褰㈡€侊紝Rev 5 鏇存柊涓?front/popFront + N-5 淇 + Rev 7, P2-4 缁熶竴璁板綍涓讳綋 + Rev 11, P3 寮傚父璺緞娉級**锛歚exec()` = 鍙嶅锛?   ```
    CtPendingEventBase* pe = nullptr;
-   while (m_queue->front(pe)) {          // front() 内部已记 kQueued（§7.10 契约 #6）
-       m_dispatcher->dispatchAny(*pe);   // ALWAYS called — even for expired targets
-       m_queue->popFront();
-   }
-   m_queue->popDropped();                // 内部按计数记 kDropped（§7.10 契约 #6）
-   ```
-   **异常路径（Rev 11, P3）**：若 `dispatchAny` 抛出（观察者/handler 用户代码异常，§8.3 异常传播），`popFront()` 未执行——**该事件留在队头，下一轮 `front()` 再次成功并重复记 `kQueued`**（trace 会重复记录同一事件）。文档定义：异常传播到 `exec()` 调用方（循环终止或由调用方重启），队列状态保持（队头事件不丢、不损坏）；重复 `kQueued` 是可接受的 trace 表现。**编码子agent 不得为吞异常而跳过 `popFront`**。
-   **N-5 修正**：**不得用 `pe->target().expired()` 判定丢弃**——空 `weak_ptr`（广播条目）的 `expired()` 返回 `true`（`use_count()==0`），会把所有异步广播静默丢弃。**广播（空 target）与定向（非空 target）都走 `dispatchAny`**；`dispatchAny` 内部判定：`isBroadcast()`（投递全表）/ 非广播且 `target().lock()` 失败（**记 `kDropped` 并跳过投递**）。**Rev 7, P2-4 统一**：目标已亡的 `kDropped` 由 `dispatchAny` 内部记录——排空循环不跳过 `dispatchAny`，避免"跳过 → 无人记录"的矛盾。
-   然后等待平台源/唤醒（M2 用条件变量或平台事件）→ 处理平台源 → 检查 `quit`。**kDropped 三句分工（Rev 10, P3 措辞修正）**：① `kQueued` 由 `CtQueue::front()` 记**队列 trace**（§7.10 契约 #6）；② 溢出 `kDropped` 由 `CtQueue::popDropped()` 记**队列 trace**；③ **目标已亡的 `kDropped` 由 `dispatchAny` 记 dispatcher trace**（`dispatchAny` 只收 `CtPendingEventBase&`，无法访问队列的 `m_trace`，只能记 dispatcher 自己的 trace）——**不是**"一律经队列 trace"。**`push` 侧不记 trace**。**`CtEventLoop` 不是 `CtDispatchContext` 的友元**——它不直接构造 ctx，只调用队列公开接口（Rev 5, P1-3 同步）。`dispatchAny` 内部 `std::visit` 还原类型进分发管线（§10.1 契约 #5）。**分发永远发生在队列归属线程**（§10 保证）。
-3. **`setDispatcher` 模板（Rev 5, P2-3 修正：队列惰性创建 + Rev 8, P2-4 硬契约 + Rev 9, P2-4 线程约束）**：接受 `CtDispatcher<EventSet>`（类型域闭合）。**队列在 `setDispatcher<EventSet>` 内惰性创建**（`m_queue = std::make_unique<CtQueue<EventSet>>()`）——构造函数运行时 `EventSet` 未知，默认构造不可能实例化 `CtQueue<EventSet>`；只有 `setDispatcher` 模板实例化点才知道 `EventSet`。**硬契约（Rev 8, P2-4）**：一个 loop 同一时刻只 attach 一个 dispatcher；**`setDispatcher` 只允许以同一 `EventSet` 调用一次**，重复 attach（含不同 `EventSet`）**拒绝并断言**——保证"队列 EventSet == dispatcher EventSet"不变量（排空侧 `dispatchAny` 的 `eventSetId()` 断言依赖它，§6.5/§10.1 契约 #5）。**线程约束（Rev 9, P2-4）**：`setDispatcher` 断言 **`dispatcher->assertSameThread()`**——dispatcher 的创建线程必须等于 loop 的归属线程（否则排空时异步广播走 §8.2 Step 1 的 dispatcher 归属断言会误触发：A 线程创建的 dispatcher、B 线程的 loop → A≠B 时 debug abort / release 丢事件）。**`queue()` 前置条件：必须先 `setDispatcher`（否则空指针解引用，M2 断言）**。**禁止按值 `CtQueueBase` 成员**（抽象基类按值必切片/不可编译，Rev 4, P1-4）。
-4. **`quit` 线程安全**：任意线程可调（`std::atomic<bool>`）。
-5. **`queue()` 暴露**：`post/postTo` 需要往目标线程的队列投递（§10）。`CtQueueBase` 是类型擦除基（`CtQueue<EventSet>` 派生），避免 loop 依赖具体 EventSet。
-6. **`current()` / `attachToCurrentThread()`（Rev 4, P1-6 路由机制）**：每线程 TLS 注册表——`attachToCurrentThread()` 把本 loop 注册为当前线程的 loop；`current()` 查当前线程的 loop（无则 `nullptr`）。`post(receiver, ev)` 的路由 = `receiver->affinityThread()` → 目标线程的 loop（`CtEventLoop::current()` 只对调用线程有效，跨线程查找需经线程→loop 映射，M2 定具体存储；`post` 语义依赖此路由，§10.1 契约 #1）。
-7. **析构与路由注销（Rev 5, P2-4）**：`~CtEventLoop` 必须**从 TLS 与线程→loop 映射中移除自身**（否则另一线程的 `post` 在 loop 析构后查到悬垂指针）。具体契约：析构时若本 loop 仍是当前线程 TLS 的 loop，则清空 TLS；若在跨线程映射中，则加锁移除本 loop 条目。**`post` 侧拿到 loop 指针后必须校验其队列仍存活**（经 `CtQueueBase&` 引用计数语义或锁内校验，M2 定细节；文档要求"post 语义可落地、无悬垂投递"）。
-8. **M2 占位**：M1 不实现 `CtEventLoop`；签名与循环语义在本文档定死。
+   while (m_queue->front(pe)) {          // front() 鍐呴儴宸茶 kQueued锛埪?.10 濂戠害 #6锛?       m_dispatcher->dispatchAny(*pe);   // ALWAYS called 鈥?even for expired targets
+       m_queue->popFront(pe);            // 鎸夎韩浠藉垹闄わ紙瀹¤ MUST-1 淇锛?   }
+   m_queue->popDropped();                // 鍐呴儴鎸夎鏁拌 kDropped锛埪?.10 濂戠害 #6锛?   ```
+   **寮傚父璺緞锛圧ev 11, P3锛?*锛氳嫢 `dispatchAny` 鎶涘嚭锛堣瀵熻€?handler 鐢ㄦ埛浠ｇ爜寮傚父锛屄?.3 寮傚父浼犳挱锛夛紝`popFront()` 鏈墽琛屸€斺€?*璇ヤ簨浠剁暀鍦ㄩ槦澶达紝涓嬩竴杞?`front()` 鍐嶆鎴愬姛骞堕噸澶嶈 `kQueued`**锛坱race 浼氶噸澶嶈褰曞悓涓€浜嬩欢锛夈€傛枃妗ｅ畾涔夛細寮傚父浼犳挱鍒?`exec()` 璋冪敤鏂癸紙寰幆缁堟鎴栫敱璋冪敤鏂归噸鍚級锛岄槦鍒楃姸鎬佷繚鎸侊紙闃熷ご浜嬩欢涓嶄涪銆佷笉鎹熷潖锛夛紱閲嶅 `kQueued` 鏄彲鎺ュ彈鐨?trace 琛ㄧ幇銆?*缂栫爜瀛恆gent 涓嶅緱涓哄悶寮傚父鑰岃烦杩?`popFront`**銆?   **N-5 淇**锛?*涓嶅緱鐢?`pe->target().expired()` 鍒ゅ畾涓㈠純**鈥斺€旂┖ `weak_ptr`锛堝箍鎾潯鐩級鐨?`expired()` 杩斿洖 `true`锛坄use_count()==0`锛夛紝浼氭妸鎵€鏈夊紓姝ュ箍鎾潤榛樹涪寮冦€?*骞挎挱锛堢┖ target锛変笌瀹氬悜锛堥潪绌?target锛夐兘璧?`dispatchAny`**锛沗dispatchAny` 鍐呴儴鍒ゅ畾锛歚isBroadcast()`锛堟姇閫掑叏琛級/ 闈炲箍鎾笖 `target().lock()` 澶辫触锛?*璁?`kDropped` 骞惰烦杩囨姇閫?*锛夈€?*Rev 7, P2-4 缁熶竴**锛氱洰鏍囧凡浜＄殑 `kDropped` 鐢?`dispatchAny` 鍐呴儴璁板綍鈥斺€旀帓绌哄惊鐜笉璺宠繃 `dispatchAny`锛岄伩鍏?璺宠繃 鈫?鏃犱汉璁板綍"鐨勭煕鐩俱€?   鐒跺悗绛夊緟骞冲彴婧?鍞ら啋锛圡2 鐢ㄦ潯浠跺彉閲忔垨骞冲彴浜嬩欢锛夆啋 澶勭悊骞冲彴婧?鈫?妫€鏌?`quit`銆?*kDropped 涓夊彞鍒嗗伐锛圧ev 10, P3 鎺緸淇锛?*锛氣憼 `kQueued` 鐢?`CtQueue::front()` 璁?*闃熷垪 trace**锛埪?.10 濂戠害 #6锛夛紱鈶?婧㈠嚭 `kDropped` 鐢?`CtQueue::popDropped()` 璁?*闃熷垪 trace**锛涒憿 **鐩爣宸蹭骸鐨?`kDropped` 鐢?`dispatchAny` 璁?dispatcher trace**锛坄dispatchAny` 鍙敹 `CtPendingEventBase&`锛屾棤娉曡闂槦鍒楃殑 `m_trace`锛屽彧鑳借 dispatcher 鑷繁鐨?trace锛夆€斺€?*涓嶆槸**"涓€寰嬬粡闃熷垪 trace"銆?*`push` 渚т笉璁?trace**銆?*`CtEventLoop` 涓嶆槸 `CtDispatchContext` 鐨勫弸鍏?*鈥斺€斿畠涓嶇洿鎺ユ瀯閫?ctx锛屽彧璋冪敤闃熷垪鍏紑鎺ュ彛锛圧ev 5, P1-3 鍚屾锛夈€俙dispatchAny` 鍐呴儴 `std::visit` 杩樺師绫诲瀷杩涘垎鍙戠绾匡紙搂10.1 濂戠害 #5锛夈€?*鍒嗗彂姘歌繙鍙戠敓鍦ㄩ槦鍒楀綊灞炵嚎绋?*锛埪?0 淇濊瘉锛夈€?3. **`setDispatcher` 妯℃澘锛圧ev 5, P2-3 淇锛氶槦鍒楁儼鎬у垱寤?+ Rev 8, P2-4 纭绾?+ Rev 9, P2-4 绾跨▼绾︽潫锛?*锛氭帴鍙?`CtDispatcher<EventSet>`锛堢被鍨嬪煙闂悎锛夈€?*闃熷垪鍦?`setDispatcher<EventSet>` 鍐呮儼鎬у垱寤?*锛坄m_queue = std::make_unique<CtQueue<EventSet>>()`锛夆€斺€旀瀯閫犲嚱鏁拌繍琛屾椂 `EventSet` 鏈煡锛岄粯璁ゆ瀯閫犱笉鍙兘瀹炰緥鍖?`CtQueue<EventSet>`锛涘彧鏈?`setDispatcher` 妯℃澘瀹炰緥鍖栫偣鎵嶇煡閬?`EventSet`銆?*纭绾︼紙Rev 8, P2-4锛?*锛氫竴涓?loop 鍚屼竴鏃跺埢鍙?attach 涓€涓?dispatcher锛?*`setDispatcher` 鍙厑璁镐互鍚屼竴 `EventSet` 璋冪敤涓€娆?*锛岄噸澶?attach锛堝惈涓嶅悓 `EventSet`锛?*鎷掔粷骞舵柇瑷€**鈥斺€斾繚璇?闃熷垪 EventSet == dispatcher EventSet"涓嶅彉閲忥紙鎺掔┖渚?`dispatchAny` 鐨?`eventSetId()` 鏂█渚濊禆瀹冿紝搂6.5/搂10.1 濂戠害 #5锛夈€?*绾跨▼绾︽潫锛圧ev 9, P2-4锛?*锛歚setDispatcher` 鏂█ **`dispatcher->assertSameThread()`**鈥斺€攄ispatcher 鐨勫垱寤虹嚎绋嬪繀椤荤瓑浜?loop 鐨勫綊灞炵嚎绋嬶紙鍚﹀垯鎺掔┖鏃跺紓姝ュ箍鎾蛋 搂8.2 Step 1 鐨?dispatcher 褰掑睘鏂█浼氳瑙﹀彂锛欰 绾跨▼鍒涘缓鐨?dispatcher銆丅 绾跨▼鐨?loop 鈫?A鈮燘 鏃?debug abort / release 涓簨浠讹級銆?*`queue()` 鍓嶇疆鏉′欢锛氬繀椤诲厛 `setDispatcher`锛堝惁鍒欑┖鎸囬拡瑙ｅ紩鐢紝M2 鏂█锛?*銆?*绂佹鎸夊€?`CtQueueBase` 鎴愬憳**锛堟娊璞″熀绫绘寜鍊煎繀鍒囩墖/涓嶅彲缂栬瘧锛孯ev 4, P1-4锛夈€?4. **`quit` 绾跨▼瀹夊叏**锛氫换鎰忕嚎绋嬪彲璋冿紙`std::atomic<bool>`锛夈€?5. **`queue()` 鏆撮湶**锛歚post/postTo` 闇€瑕佸線鐩爣绾跨▼鐨勯槦鍒楁姇閫掞紙搂10锛夈€俙CtQueueBase` 鏄被鍨嬫摝闄ゅ熀锛坄CtQueue<EventSet>` 娲剧敓锛夛紝閬垮厤 loop 渚濊禆鍏蜂綋 EventSet銆?6. **`current()` / `attachToCurrentThread()`锛圧ev 4, P1-6 璺敱鏈哄埗锛?*锛氭瘡绾跨▼ TLS 娉ㄥ唽琛ㄢ€斺€擿attachToCurrentThread()` 鎶婃湰 loop 娉ㄥ唽涓哄綋鍓嶇嚎绋嬬殑 loop锛沗current()` 鏌ュ綋鍓嶇嚎绋嬬殑 loop锛堟棤鍒?`nullptr`锛夈€俙post(receiver, ev)` 鐨勮矾鐢?= `receiver->affinityThread()` 鈫?鐩爣绾跨▼鐨?loop锛坄CtEventLoop::current()` 鍙璋冪敤绾跨▼鏈夋晥锛岃法绾跨▼鏌ユ壘闇€缁忕嚎绋嬧啋loop 鏄犲皠锛孧2 瀹氬叿浣撳瓨鍌紱`post` 璇箟渚濊禆姝よ矾鐢憋紝搂10.1 濂戠害 #1锛夈€?7. **鏋愭瀯涓庤矾鐢辨敞閿€锛圧ev 5, P2-4锛?*锛歚~CtEventLoop` 蹇呴』**浠?TLS 涓庣嚎绋嬧啋loop 鏄犲皠涓Щ闄よ嚜韬?*锛堝惁鍒欏彟涓€绾跨▼鐨?`post` 鍦?loop 鏋愭瀯鍚庢煡鍒版偓鍨傛寚閽堬級銆傚叿浣撳绾︼細鏋愭瀯鏃惰嫢鏈?loop 浠嶆槸褰撳墠绾跨▼ TLS 鐨?loop锛屽垯娓呯┖ TLS锛涜嫢鍦ㄨ法绾跨▼鏄犲皠涓紝鍒欏姞閿佺Щ闄ゆ湰 loop 鏉＄洰銆?*`post` 渚ф嬁鍒?loop 鎸囬拡鍚庡繀椤绘牎楠屽叾闃熷垪浠嶅瓨娲?*锛堢粡 `CtQueueBase&` 寮曠敤璁℃暟璇箟鎴栭攣鍐呮牎楠岋紝M2 瀹氱粏鑺傦紱鏂囨。瑕佹眰"post 璇箟鍙惤鍦般€佹棤鎮瀭鎶曢€?锛夈€?8. **M2 鍗犱綅**锛歁1 涓嶅疄鐜?`CtEventLoop`锛涚鍚嶄笌寰幆璇箟鍦ㄦ湰鏂囨。瀹氭銆?
+### 7.12 CtEventSource锛坈t_event_source.h锛屾柊澧烇級
 
-### 7.12 CtEventSource（ct_event_source.h，新增）
-
-**职责**：抽象**平台层**事件源接口（Qt 对应物：`QAbstractEventDispatcher`、`QSocketNotifier`、`QTimer`）。**这个名字在 §5.4 被保留**——v0 的 `enum CtEventSource` 已改名 `CtEventOrigin`（§7.3）。源实现（定时器、I/O、手工源）只负责把事件注入 `CtQueue`，**绝不接触接收者或分发器**（§4.1 分层规则 #3）。
-
-**精确签名**：
-
+**鑱岃矗**锛氭娊璞?*骞冲彴灞?*浜嬩欢婧愭帴鍙ｏ紙Qt 瀵瑰簲鐗╋細`QAbstractEventDispatcher`銆乣QSocketNotifier`銆乣QTimer`锛夈€?*杩欎釜鍚嶅瓧鍦?搂5.4 琚繚鐣?*鈥斺€攙0 鐨?`enum CtEventSource` 宸叉敼鍚?`CtEventOrigin`锛埪?.3锛夈€傛簮瀹炵幇锛堝畾鏃跺櫒銆両/O銆佹墜宸ユ簮锛夊彧璐熻矗鎶婁簨浠舵敞鍏?`CtQueue`锛?*缁濅笉鎺ヨЕ鎺ユ敹鑰呮垨鍒嗗彂鍣?*锛埪?.1 鍒嗗眰瑙勫垯 #3锛夈€?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_event_source.h（新增）
+// ct_event_source.h锛堟柊澧烇級
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -2212,7 +1847,7 @@ public:
 
 protected:
     /// (Rev 12, P2-B) Set the affinity thread; called by CtEventLoop::
-    /// attachSource on success (§7.11). CtEventLoop is a friend so it can
+    /// attachSource on success (搂7.11). CtEventLoop is a friend so it can
     /// reach this protected setter; derived sources may also call it if they
     /// know their thread in advance.
     void setAffinityThread(CtThreadId tid) noexcept { m_affinityThread = tid; }
@@ -2225,13 +1860,8 @@ protected:
 } // namespace crisp::event
 ```
 
-**语义契约**：
-
-1. **名字占用**：`CtEventSource` 是**新类名**，v0 的 `enum CtEventSource` 已改为 `CtEventOrigin`（§7.3）——本项目内 `CtEventSource` 从此专指抽象源接口。
-2. **注入方式唯一**：源只向 `CtQueue` 注入（`poll(CtQueueBase&)`）；**绝不直接调 `send`/接触接收者**。队列→分发器的转换只发生在 `CtEventLoop`（§4.1 规则 #4）。
-3. **轮询模型（M2）**：`CtEventLoop::exec` 每轮调所有已 attach 源的 `poll()`。M4 可加平台等待（epoll/select 桥）以支持阻塞 sleep——接口不变。
-4. **内建实现（M2 交付，Rev 11, P3 签名定稿）**：`CtTimerEventSource<EventSet>` 与 `ManualEventSource<EventSet>`——**携带 `EventSet` 类型参数的模板类**（方案 A，契约 #6），示例签名：
-   ```cpp
+**璇箟濂戠害**锛?
+1. **鍚嶅瓧鍗犵敤**锛歚CtEventSource` 鏄?*鏂扮被鍚?*锛寁0 鐨?`enum CtEventSource` 宸叉敼涓?`CtEventOrigin`锛埪?.3锛夆€斺€旀湰椤圭洰鍐?`CtEventSource` 浠庢涓撴寚鎶借薄婧愭帴鍙ｃ€?2. **娉ㄥ叆鏂瑰紡鍞竴**锛氭簮鍙悜 `CtQueue` 娉ㄥ叆锛坄poll(CtQueueBase&)`锛夛紱**缁濅笉鐩存帴璋?`send`/鎺ヨЕ鎺ユ敹鑰?*銆傞槦鍒椻啋鍒嗗彂鍣ㄧ殑杞崲鍙彂鐢熷湪 `CtEventLoop`锛埪?.1 瑙勫垯 #4锛夈€?3. **杞妯″瀷锛圡2锛?*锛歚CtEventLoop::exec` 姣忚疆璋冩墍鏈夊凡 attach 婧愮殑 `poll()`銆侻4 鍙姞骞冲彴绛夊緟锛坋poll/select 妗ワ級浠ユ敮鎸侀樆濉?sleep鈥斺€旀帴鍙ｄ笉鍙樸€?4. **鍐呭缓瀹炵幇锛圡2 浜や粯锛孯ev 11, P3 绛惧悕瀹氱锛?*锛歚CtTimerEventSource<EventSet>` 涓?`ManualEventSource<EventSet>`鈥斺€?*鎼哄甫 `EventSet` 绫诲瀷鍙傛暟鐨勬ā鏉跨被**锛堟柟妗?A锛屽绾?#6锛夛紝绀轰緥绛惧悕锛?   ```cpp
    template <typename EventSet>
    class CtTimerEventSource final : public CtEventSource {
        /// poll: assert queue.eventSetId() == CtTypeKey<EventSet>::value(),
@@ -2239,20 +1869,13 @@ protected:
        void poll(CtQueueBase& queue) override;
    };
    ```
-   两者都实现本接口；`CtTimerPayload ∈ EventSet` 由使用时 `static_assert` 保证。**`CtEventSource` 抽象接口本身保持非模板**（`poll(CtQueueBase&)` 签名不变）——模板化落在**派生源**上。
-5. **生命周期（Rev 12, P2-B）**：源由 loop 持 `shared_ptr`（`attachSource/detachSource`，§7.11 Rev 8, P2-2）；`activate/deactivate` 幂等；`affinityThread()` 由 loop attach 时设置——**写入通道**：`CtEventSource` 补 **protected `void setAffinityThread(CtThreadId)`**（或 `friend class CtEventLoop;` 二选一；建议 setter），`CtEventLoop::attachSource` 在 attach 成功时调用之（§7.11 契约新增）。
-6. **注入路径（Rev 8, P2-2 + Rev 9, P2-1 + Rev 10, P2-A 定稿：方案 A 为首选）**：源是**非模板**接口（`poll(CtQueueBase&)`），但注入需落进具体 `CtQueue<EventSet>`——源不掌握 `EventSet`。**首选方案 A（内建源一律模板化）**：`CtTimerEventSource`/`ManualEventSource` 携带 `EventSet` 类型参数，`poll` 内经 `queue.eventSetId() == EventSet 键` 断言（§6.1；`CtQueueBase::eventSetId()`）后 `static_cast<CtQueue<EventSet>&>(queue)` 强类型 `push`——**非模板源在只持 `CtQueueBase&` 的形态下没有注入通道**（既无法调用 loop 的模板成员、也无法构造 `detail::CtAnyEventHolder<EventSet>`），故源侧模板化是**唯一可行**的内建源形态。**`CtEventLoop::injectEvent<EventSet, T>`**（§7.11）**降级标注为应用/桥接层手工注入通道**（此时它有合法调用者：应用代码或 Qt 桥经 loop 指针调用；同样先断言 `queue().eventSetId()` 再 `static_cast` + 强类型 `push`）。**契约要求**：注入必须落在与 loop 队列相同 `EventSet` 的强类型路径上。
-
-**与 v0 的差异**：v0 无此类（v0 无异步、无源）；`CtEventSource` 枚举名让位给本接口——这是 §5.4 命名冲突解决的落地。
-
-### 7.13 错误类型（ct_errors.h，新增；Rev 4, P1-7 文件名统一）
-
-**职责**：统一、类型安全的事件系统错误表达。v0 用 `CtDispatchResult`（`kConsumed/kIgnored/kFiltered`）表达**分发结果**（信息性）；错误（编程错误、配置错误、运行时故障）由 `CtEventError` 携带**类别 + 消息**，二者分开——结果不是错误。
-
-**精确签名**：
-
+   涓よ€呴兘瀹炵幇鏈帴鍙ｏ紱`CtTimerPayload 鈭?EventSet` 鐢变娇鐢ㄦ椂 `static_assert` 淇濊瘉銆?*`CtEventSource` 鎶借薄鎺ュ彛鏈韩淇濇寔闈炴ā鏉?*锛坄poll(CtQueueBase&)` 绛惧悕涓嶅彉锛夆€斺€旀ā鏉垮寲钀藉湪**娲剧敓婧?*涓娿€?5. **鐢熷懡鍛ㄦ湡锛圧ev 12, P2-B锛?*锛氭簮鐢?loop 鎸?`shared_ptr`锛坄attachSource/detachSource`锛屄?.11 Rev 8, P2-2锛夛紱`activate/deactivate` 骞傜瓑锛沗affinityThread()` 鐢?loop attach 鏃惰缃€斺€?*鍐欏叆閫氶亾**锛歚CtEventSource` 琛?**protected `void setAffinityThread(CtThreadId)`**锛堟垨 `friend class CtEventLoop;` 浜岄€変竴锛涘缓璁?setter锛夛紝`CtEventLoop::attachSource` 鍦?attach 鎴愬姛鏃惰皟鐢ㄤ箣锛埪?.11 濂戠害鏂板锛夈€?6. **娉ㄥ叆璺緞锛圧ev 8, P2-2 + Rev 9, P2-1 + Rev 10, P2-A 瀹氱锛氭柟妗?A 涓洪閫夛級**锛氭簮鏄?*闈炴ā鏉?*鎺ュ彛锛坄poll(CtQueueBase&)`锛夛紝浣嗘敞鍏ラ渶钀借繘鍏蜂綋 `CtQueue<EventSet>`鈥斺€旀簮涓嶆帉鎻?`EventSet`銆?*棣栭€夋柟妗?A锛堝唴寤烘簮涓€寰嬫ā鏉垮寲锛?*锛歚CtTimerEventSource`/`ManualEventSource` 鎼哄甫 `EventSet` 绫诲瀷鍙傛暟锛宍poll` 鍐呯粡 `queue.eventSetId() == EventSet 閿甡 鏂█锛埪?.1锛沗CtQueueBase::eventSetId()`锛夊悗 `static_cast<CtQueue<EventSet>&>(queue)` 寮虹被鍨?`push`鈥斺€?*闈炴ā鏉挎簮鍦ㄥ彧鎸?`CtQueueBase&` 鐨勫舰鎬佷笅娌℃湁娉ㄥ叆閫氶亾**锛堟棦鏃犳硶璋冪敤 loop 鐨勬ā鏉挎垚鍛樸€佷篃鏃犳硶鏋勯€?`detail::CtAnyEventHolder<EventSet>`锛夛紝鏁呮簮渚фā鏉垮寲鏄?*鍞竴鍙**鐨勫唴寤烘簮褰㈡€併€?*`CtEventLoop::injectEvent<EventSet, T>`**锛埪?.11锛?*闄嶇骇鏍囨敞涓哄簲鐢?妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾**锛堟鏃跺畠鏈夊悎娉曡皟鐢ㄨ€咃細搴旂敤浠ｇ爜鎴?Qt 妗ョ粡 loop 鎸囬拡璋冪敤锛涘悓鏍峰厛鏂█ `queue().eventSetId()` 鍐?`static_cast` + 寮虹被鍨?`push`锛夈€?*濂戠害瑕佹眰**锛氭敞鍏ュ繀椤昏惤鍦ㄤ笌 loop 闃熷垪鐩稿悓 `EventSet` 鐨勫己绫诲瀷璺緞涓娿€?
+**涓?v0 鐨勫樊寮?*锛歷0 鏃犳绫伙紙v0 鏃犲紓姝ャ€佹棤婧愶級锛沗CtEventSource` 鏋氫妇鍚嶈浣嶇粰鏈帴鍙ｂ€斺€旇繖鏄?搂5.4 鍛藉悕鍐茬獊瑙ｅ喅鐨勮惤鍦般€?
+### 7.13 閿欒绫诲瀷锛坈t_errors.h锛屾柊澧烇紱Rev 4, P1-7 鏂囦欢鍚嶇粺涓€锛?
+**鑱岃矗**锛氱粺涓€銆佺被鍨嬪畨鍏ㄧ殑浜嬩欢绯荤粺閿欒琛ㄨ揪銆倂0 鐢?`CtDispatchResult`锛坄kConsumed/kIgnored/kFiltered`锛夎〃杈?*鍒嗗彂缁撴灉**锛堜俊鎭€э級锛涢敊璇紙缂栫▼閿欒銆侀厤缃敊璇€佽繍琛屾椂鏁呴殰锛夌敱 `CtEventError` 鎼哄甫**绫诲埆 + 娑堟伅**锛屼簩鑰呭垎寮€鈥斺€旂粨鏋滀笉鏄敊璇€?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_errors.h（新增）  （Rev 4, P1-7：文件名从 ct_event_error.h 统一为 ct_errors.h，与 §5.3 一致）
+// ct_errors.h锛堟柊澧烇級  锛圧ev 4, P1-7锛氭枃浠跺悕浠?ct_event_error.h 缁熶竴涓?ct_errors.h锛屼笌 搂5.3 涓€鑷达級
 #pragma once
 #include <cstdint>
 #include <string>
@@ -2279,7 +1902,7 @@ enum class CtEventErrorKind : uint8_t {
 struct CtEventError {
     CtEventErrorKind kind{CtEventErrorKind::kNone};
     std::string message;               ///< human-readable detail (may be empty)
-    uint64_t sequence = 0;             ///< related event sequence (§8.2)
+    uint64_t sequence = 0;             ///< related event sequence (搂8.2)
 
     explicit operator bool() const noexcept;  ///< true iff kind != kNone
 };
@@ -2298,22 +1921,14 @@ CtEventError makeError(CtEventErrorKind kind, std::string_view message);
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **缁撴灉 鈮?閿欒**锛歚CtDispatchResult`锛埪?.3锛夎〃杈?杩欐鍒嗗彂鏈夋病鏈?handler 鎺ヤ綇"鈥斺€斾俊鎭€с€侀潪寮傚父锛沗CtEventError` 琛ㄨ揪"绯荤粺鍝噷鍧忎簡"鈥斺€斿紓甯歌矾寰勩€備袱鑰呬笉娣风敤锛坄CtDispatchResult::kNoReceiver` 鏄俊鎭紝涓嶆槸 `kReceiverGone` 閿欒锛夈€?2. **`operator bool`**锛歚kNone` 鈫?false銆傜紪鐮佸瓙agent 鐢?`if (err)` 鍒ゆ柇锛屼笉鐢?`kind ==`銆?3. **鐑矾寰勪笉浜х敓閿欒**锛氶敊璇彧鍦ㄥ紓甯歌矾寰勬瀯閫狅紙绫诲瀷涓嶅湪闆嗗悎銆佺嚎绋嬭繚瑙勭瓑锛夛紝**缁濅笉鍦?`send/broadcast` 鍒嗗彂鐑矾寰勬瀯閫?*锛堝垎閰?`std::string` 鍙湪閿欒鏃讹級銆?4. **`kTypeNotInSet`**锛氱紪绋嬮敊璇€斺€旇繍琛屾湡鐪嬪埌锛堢悊璁轰笂 static_assert 宸叉尅锛夛紱淇濈暀瀹冪敤浜庡姩鎬?璺?DLL 鍦烘櫙锛圡4 `CtOpaqueEvent` 閫冪敓鑸憋級銆?5. **`kWrongThread`**锛歳elease 妯″紡涓嬬嚎绋嬪綊灞炴柇瑷€鐨勬浛浠ｅ洖鎶ワ紙debug 涓嬬洿鎺?`assert`锛屄?.2锛夈€俙send` 杩斿洖 `kUnhandled` 鐨勫悓鏃讹紝dispatcher 鍙涓€娆?`kWrongThread` 閿欒鈥斺€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氶敊璇笉鏀瑰彉杩斿洖绫诲瀷锛屽彧杩?trace/鏃ュ織銆?
+### 7.14 CtThreadAffinity锛坈t_thread_affinity.h锛屾柊澧烇級
 
-1. **结果 ≠ 错误**：`CtDispatchResult`（§7.3）表达"这次分发有没有 handler 接住"——信息性、非异常；`CtEventError` 表达"系统哪里坏了"——异常路径。两者不混用（`CtDispatchResult::kNoReceiver` 是信息，不是 `kReceiverGone` 错误）。
-2. **`operator bool`**：`kNone` → false。编码子agent 用 `if (err)` 判断，不用 `kind ==`。
-3. **热路径不产生错误**：错误只在异常路径构造（类型不在集合、线程违规等），**绝不在 `send/broadcast` 分发热路径构造**（分配 `std::string` 只在错误时）。
-4. **`kTypeNotInSet`**：编程错误——运行期看到（理论上 static_assert 已挡）；保留它用于动态/跨 DLL 场景（M4 `CtOpaqueEvent` 逃生舱）。
-5. **`kWrongThread`**：release 模式下线程归属断言的替代回报（debug 下直接 `assert`，§8.2）。`send` 返回 `kUnhandled` 的同时，dispatcher 可记一次 `kWrongThread` 错误——**编码子agent 注意**：错误不改变返回类型，只进 trace/日志。
-
-### 7.14 CtThreadAffinity（ct_thread_affinity.h，新增）
-
-**职责**：把"线程归属"从注释变成**类型化、可断言的数据**——记录创建线程 id，并提供 `isOnThread()` / `assertSameThread()` 两个归属校验原语。`CtReceiver`（§7.5）与 `CtQueue`（§7.10）都内嵌它做归属判定；`CtDispatcher::send/post/postTo`（§7.8、§10）用它决定"同线程断言"还是"跨线程投递"。
-
-**精确签名**：
-
+**鑱岃矗**锛氭妸"绾跨▼褰掑睘"浠庢敞閲婂彉鎴?*绫诲瀷鍖栥€佸彲鏂█鐨勬暟鎹?*鈥斺€旇褰曞垱寤虹嚎绋?id锛屽苟鎻愪緵 `isOnThread()` / `assertSameThread()` 涓や釜褰掑睘鏍￠獙鍘熻銆俙CtReceiver`锛埪?.5锛変笌 `CtQueue`锛埪?.10锛夐兘鍐呭祵瀹冨仛褰掑睘鍒ゅ畾锛沗CtDispatcher::send/post/postTo`锛埪?.8銆伮?0锛夌敤瀹冨喅瀹?鍚岀嚎绋嬫柇瑷€"杩樻槸"璺ㄧ嚎绋嬫姇閫?銆?
+**绮剧‘绛惧悕**锛?
 ```cpp
-// ct_thread_affinity.h（新增）
+// ct_thread_affinity.h锛堟柊澧烇級
 #pragma once
 #include <cstdint>
 #include <thread>
@@ -2338,7 +1953,7 @@ CtThreadId currentThreadId() noexcept;
 ///  - assertSameThread(): fatal in debug builds (used by send / pop / exec).
 ///
 /// In release builds assertSameThread() degrades to a return value so the
-/// caller can fail gracefully (see §8.2 归属规则).
+/// caller can fail gracefully (see 搂8.2 褰掑睘瑙勫垯).
 class CtThreadAffinity {
 public:
     CtThreadAffinity() noexcept;               ///< records currentThreadId()
@@ -2357,7 +1972,7 @@ public:
     bool assertSameThread() const noexcept;
 
     /// Re-bind to the current thread (used when a receiver is deliberately
-    /// moved between threads — see §10.2 edge case). Only permitted when no
+    /// moved between threads 鈥?see 搂10.2 edge case). Only permitted when no
     /// registrations are pending; callers must guarantee that.
     void rebindToCurrentThread() noexcept;
 
@@ -2368,34 +1983,24 @@ private:
 } // namespace crisp::event
 ```
 
-**语义契约**：
+**璇箟濂戠害**锛?
+1. **`CtThreadId` 鏁板€煎寲锛圧ev 3, #7 瑁佸畾宸插洖鍐欙紱Rev 4, P2-11 瀹氱锛?*锛歚currentThreadId()` 鐢?*骞冲彴 API**鈥斺€擶indows/MinGW 涓?`GetCurrentThreadId()`锛堢ǔ瀹氥€佺‘瀹氥€丱(1)锛屾棤闇€鏄犲皠琛級锛涜法骞冲彴淇濈暀鎺ュ彛鎶借薄锛坄CtThreadId currentThreadId()` 澹版槑涓嶅彉锛屽疄鐜版寜骞冲彴鍒囨崲锛夈€?*涓嶄娇鐢?`std::hash<std::thread::id>`**锛堣法鏍囧噯搴撳疄鐜颁笉绋冲畾銆佷笉鍙簭鍒楀寲锛夈€俙0` 淇濈暀涓?鏈粦瀹?鍝ㄥ叺銆傚彧瑕佹眰杩涚▼鍐呯ǔ瀹氥€佸彲鐩哥瓑姣旇緝鈥斺€斾笉鍋氭寔涔呭寲銆?2. **鏋勯€犲嵆缁戝畾**锛歚CtThreadAffinity` 榛樿鏋勯€犳椂璁板綍 `currentThreadId()`銆俙CtReceiver` 涓?`CtQueue` 鍦ㄥ悇鑷瀯閫犲嚱鏁颁腑鍐呭祵涓€涓紙`m_affinity` 鎴愬憳锛夛紝褰掑睘绾跨▼ = 鍒涘缓绾跨▼锛埪?0.2 褰掑睘瑙勫垯锛夈€?3. **`isOnThread()` 寤変环**锛氫竴娆℃暣鏁版瘮杈冿紝鏃犻攣鏃犲垎閰嶁€斺€?*寮傛璺敱锛坧ost/postTo锛変笌鍒嗗彂鍏ュ彛锛坰end锛夐兘渚濊禆瀹?*锛屽繀椤诲粔浠枫€?4. **`assertSameThread()` 鍒嗙骇**锛歞ebug 鏋勫缓涓?`assert(m_threadId == currentThreadId())` 澶辫触鍗崇粓姝紱release 鏋勫缓涓嬮€€鍖栦负 `return m_threadId == currentThreadId()`锛岀敱璋冪敤鏂瑰喅瀹氶檷绾ц矾寰勶紙`send` 杩斿洖 `kUnhandled` 骞惰 `kWrongThread`锛屄?.13/搂8.2锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氫袱绉嶆瀯寤虹殑璋冪敤鐐瑰啓娉曞繀椤荤粺涓€涓?`if (!affinity.assertSameThread()) { ...degrade... }`锛屾柇瑷€鏈韩鍦?debug 涓嬪厛瑙﹀彂銆?5. **`rebindToCurrentThread()`**锛氱嚎绋嬭縼绉荤殑閫冪敓鑸憋紙搂10.2 寮€鏀鹃棶棰橈級鈥斺€旈粯璁?*涓嶅厑璁?*锛堝簲鐢ㄤ唬鐮佷笉寰楃洿鎺ヨ皟鐢紱浠呭湪 dispatcher 纭鏃犺鎺ユ敹鑰呯殑寰呮姇閫?寰呮敞鍐岄」鏃剁粡鍐呴儴璺緞璋冪敤锛夈€侻1 鍙殏涓嶅疄鐜帮紝鏍囪 TODO銆?6. **褰掑睘鍒ゅ畾鍩哄噯缁熶竴**锛歚CtReceiver::affinityThread()`锛埪?.5锛夎繑鍥炲唴宓?affinity 鐨?`thread()`锛沗CtQueue::affinityThread()`锛埪?.10锛夊悓鐞嗐€?*鎵€鏈?鍚岀嚎绋?璺ㄧ嚎绋?鍒ゅ畾鍙€氳繃 CtThreadAffinity锛屼笉寰楀彟鍐?`std::this_thread::get_id()` 姣旇緝**鈥斺€斾繚璇佸崟涓€浜嬪疄鏉ユ簮銆?
+**涓?v0 鐨勫樊寮?*锛歷0 鏃犱换浣曠嚎绋嬪綊灞炴蹇碉紙`dispatch()` 浠呮敞閲?闈炵嚎绋嬪畨鍏?锛夈€俙CtThreadAffinity` 鏄?绾跨▼瑙勫垯鏄惧紡"锛堢户鎵跨害鏉?#4 / 璁捐鍘熷垯 #4锛夌殑鏍稿績杞戒綋銆?
+### 7.15 CtHandlerPriority锛堝苟鍏?ct_handler_token.h锛屾柊澧烇級
 
-1. **`CtThreadId` 数值化（Rev 3, #7 裁定已回写；Rev 4, P2-11 定稿）**：`currentThreadId()` 用**平台 API**——Windows/MinGW 下 `GetCurrentThreadId()`（稳定、确定、O(1)，无需映射表）；跨平台保留接口抽象（`CtThreadId currentThreadId()` 声明不变，实现按平台切换）。**不使用 `std::hash<std::thread::id>`**（跨标准库实现不稳定、不可序列化）。`0` 保留为"未绑定"哨兵。只要求进程内稳定、可相等比较——不做持久化。
-2. **构造即绑定**：`CtThreadAffinity` 默认构造时记录 `currentThreadId()`。`CtReceiver` 与 `CtQueue` 在各自构造函数中内嵌一个（`m_affinity` 成员），归属线程 = 创建线程（§10.2 归属规则）。
-3. **`isOnThread()` 廉价**：一次整数比较，无锁无分配——**异步路由（post/postTo）与分发入口（send）都依赖它**，必须廉价。
-4. **`assertSameThread()` 分级**：debug 构建下 `assert(m_threadId == currentThreadId())` 失败即终止；release 构建下退化为 `return m_threadId == currentThreadId()`，由调用方决定降级路径（`send` 返回 `kUnhandled` 并记 `kWrongThread`，§7.13/§8.2）。**编码子agent 注意**：两种构建的调用点写法必须统一为 `if (!affinity.assertSameThread()) { ...degrade... }`，断言本身在 debug 下先触发。
-5. **`rebindToCurrentThread()`**：线程迁移的逃生舱（§10.2 开放问题）——默认**不允许**（应用代码不得直接调用；仅在 dispatcher 确认无该接收者的待投递/待注册项时经内部路径调用）。M1 可暂不实现，标记 TODO。
-6. **归属判定基准统一**：`CtReceiver::affinityThread()`（§7.5）返回内嵌 affinity 的 `thread()`；`CtQueue::affinityThread()`（§7.10）同理。**所有"同线程/跨线程"判定只通过 CtThreadAffinity，不得另写 `std::this_thread::get_id()` 比较**——保证单一事实来源。
-
-**与 v0 的差异**：v0 无任何线程归属概念（`dispatch()` 仅注释"非线程安全"）。`CtThreadAffinity` 是"线程规则显式"（继承约束 #4 / 设计原则 #4）的核心载体。
-
-### 7.15 CtHandlerPriority（并入 ct_handler_token.h，新增）
-
-**职责**：handler/filter 的**确定性排序优先级**。定义 `kHigh/kNormal/kLow` 三档（可扩展为任意 `int`），作用于两类有序结构：
-- **filters**：同一类型键下**按优先级降序执行**（高优先级先判），同级按**注册序号**（`id`）升序——保证确定性；
-- **handlers**：§6.5 表中已含 `priority` 字段，但**默认 `kNormal` 且同类型下 handler 仍按注册顺序执行**（v0 语义保留）——priority 仅作 M4 队列排序（§10.3）与未来优先级投递的预留，**M1 同步路径不因 priority 改变 handler 执行顺序**。
-
-**精确签名**（追加到 `ct_handler_token.h`）：
+**鑱岃矗**锛歨andler/filter 鐨?*纭畾鎬ф帓搴忎紭鍏堢骇**銆傚畾涔?`kHigh/kNormal/kLow` 涓夋。锛堝彲鎵╁睍涓轰换鎰?`int`锛夛紝浣滅敤浜庝袱绫绘湁搴忕粨鏋勶細
+- **filters**锛氬悓涓€绫诲瀷閿笅**鎸変紭鍏堢骇闄嶅簭鎵ц**锛堥珮浼樺厛绾у厛鍒わ級锛屽悓绾ф寜**娉ㄥ唽搴忓彿**锛坄id`锛夊崌搴忊€斺€斾繚璇佺‘瀹氭€э紱
+- **handlers**锛毬?.5 琛ㄤ腑宸插惈 `priority` 瀛楁锛屼絾**榛樿 `kNormal` 涓斿悓绫诲瀷涓?handler 浠嶆寜娉ㄥ唽椤哄簭鎵ц**锛坴0 璇箟淇濈暀锛夆€斺€攑riority 浠呬綔 M4 闃熷垪鎺掑簭锛埪?0.3锛変笌鏈潵浼樺厛绾ф姇閫掔殑棰勭暀锛?*M1 鍚屾璺緞涓嶅洜 priority 鏀瑰彉 handler 鎵ц椤哄簭**銆?
+**绮剧‘绛惧悕**锛堣拷鍔犲埌 `ct_handler_token.h`锛夛細
 
 ```cpp
-// ct_handler_token.h（追加）
+// ct_handler_token.h锛堣拷鍔狅級
 namespace crisp::event {
 
-/// Registration priority for filters (and future queue ordering, §10.3).
+/// Registration priority for filters (and future queue ordering, 搂10.3).
 /// Filters with HIGHER priority run FIRST; equal priority keeps
 /// registration order (stable by CtHandlerId). M1 handlers: this value is
-/// stored in the table (§6.5) but does NOT reorder handler delivery —
-/// handlers always run in registration order (v0 semantics preserved).
+/// stored in the table (搂6.5) but does NOT reorder handler delivery 鈥?/// handlers always run in registration order (v0 semantics preserved).
 enum class CtHandlerPriority : int {
     kHigh   = 100,
     kNormal = 0,
@@ -2405,366 +2010,178 @@ enum class CtHandlerPriority : int {
 } // namespace crisp::event
 ```
 
-**语义契约**：
-
-1. **`int` 底层 + 三档命名值**：任何在 `[kLow, kHigh]` 之外的应用定义值都合法（枚举底层是 `int`，可 `static_cast<CtHandlerPriority>(int)`），但**默认只承诺三档语义**。编码子agent 不得假定 `kHigh` 是最大值（未来可加 `kUrgent = 1000`）。
-2. **filters 排序规则（M1 生效）**：同一 `CtTypeKey<T>` 的 filter 向量按 `(priority 降序, id 升序)` 稳定排序。**`addFilter<T>` 内部必须持锁在写入时插入正确位置**（COW 拷贝是写路径，允许锁与排序），或写入后在下一次快照发布前排序——两种实现都满足"分发快照内已有序"。`CtDispatchContext::filterIndex()`（§7.6）即本次执行序中的 1 基位置，**不是注册 id**。
-3. **handlers 排序规则（M1 不变）**：handler 按注册顺序（`id` 升序）执行；`priority` 字段仅记录、不参与 M1 分发排序——避免改变 v0 已建立的行为。M4 若引入优先级 handler，需在 §14 开放问题中重新评审。
-4. **默认值**：`HandlerEntry::priority` 默认 `kNormal`（§6.5 已含）；`FilterEntry` 的 `filterSeq`（§6.5 已含）是**用户赋序**、与 `CtHandlerPriority` 正交——`filterSeq` 仅在两个 filter 优先级相同时作次级键（升序），保证完全确定性。
-5. **与 token 的关系**：`addFilter/addHandler` 的公开签名**不新增 priority 参数**（M1 保持简洁）；priority 通过 `CtHandlerToken` 之后的可选 setter 或 `addFilter<T>(filter, priority, name)` 重载在 M4 引入。**§7.8 签名本轮不变**——文档与实现保持一致，避免编码子agent 落空。
-
-**与 v0 的差异**：v0 无优先级概念（filter 按 push 序执行）。§7.15 引入确定性排序，但不改变 v0 的 handler 执行顺序语义。
-
+**璇箟濂戠害**锛?
+1. **`int` 搴曞眰 + 涓夋。鍛藉悕鍊?*锛氫换浣曞湪 `[kLow, kHigh]` 涔嬪鐨勫簲鐢ㄥ畾涔夊€奸兘鍚堟硶锛堟灇涓惧簳灞傛槸 `int`锛屽彲 `static_cast<CtHandlerPriority>(int)`锛夛紝浣?*榛樿鍙壙璇轰笁妗ｈ涔?*銆傜紪鐮佸瓙agent 涓嶅緱鍋囧畾 `kHigh` 鏄渶澶у€硷紙鏈潵鍙姞 `kUrgent = 1000`锛夈€?2. **filters 鎺掑簭瑙勫垯锛圡1 鐢熸晥锛?*锛氬悓涓€ `CtTypeKey<T>` 鐨?filter 鍚戦噺鎸?`(priority 闄嶅簭, id 鍗囧簭)` 绋冲畾鎺掑簭銆?*`addFilter<T>` 鍐呴儴蹇呴』鎸侀攣鍦ㄥ啓鍏ユ椂鎻掑叆姝ｇ‘浣嶇疆**锛圕OW 鎷疯礉鏄啓璺緞锛屽厑璁搁攣涓庢帓搴忥級锛屾垨鍐欏叆鍚庡湪涓嬩竴娆″揩鐓у彂甯冨墠鎺掑簭鈥斺€斾袱绉嶅疄鐜伴兘婊¤冻"鍒嗗彂蹇収鍐呭凡鏈夊簭"銆俙CtDispatchContext::filterIndex()`锛埪?.6锛夊嵆鏈鎵ц搴忎腑鐨?1 鍩轰綅缃紝**涓嶆槸娉ㄥ唽 id**銆?3. **handlers 鎺掑簭瑙勫垯锛圡1 涓嶅彉锛?*锛歨andler 鎸夋敞鍐岄『搴忥紙`id` 鍗囧簭锛夋墽琛岋紱`priority` 瀛楁浠呰褰曘€佷笉鍙備笌 M1 鍒嗗彂鎺掑簭鈥斺€旈伩鍏嶆敼鍙?v0 宸插缓绔嬬殑琛屼负銆侻4 鑻ュ紩鍏ヤ紭鍏堢骇 handler锛岄渶鍦?搂14 寮€鏀鹃棶棰樹腑閲嶆柊璇勫銆?4. **榛樿鍊?*锛歚HandlerEntry::priority` 榛樿 `kNormal`锛埪?.5 宸插惈锛夛紱`FilterEntry` 鐨?`filterSeq`锛埪?.5 宸插惈锛夋槸**鐢ㄦ埛璧嬪簭**銆佷笌 `CtHandlerPriority` 姝ｄ氦鈥斺€擿filterSeq` 浠呭湪涓や釜 filter 浼樺厛绾х浉鍚屾椂浣滄绾ч敭锛堝崌搴忥級锛屼繚璇佸畬鍏ㄧ‘瀹氭€с€?5. **涓?token 鐨勫叧绯?*锛歚addFilter/addHandler` 鐨勫叕寮€绛惧悕**涓嶆柊澧?priority 鍙傛暟**锛圡1 淇濇寔绠€娲侊級锛沺riority 閫氳繃 `CtHandlerToken` 涔嬪悗鐨勫彲閫?setter 鎴?`addFilter<T>(filter, priority, name)` 閲嶈浇鍦?M4 寮曞叆銆?*搂7.8 绛惧悕鏈疆涓嶅彉**鈥斺€旀枃妗ｄ笌瀹炵幇淇濇寔涓€鑷达紝閬垮厤缂栫爜瀛恆gent 钀界┖銆?
+**涓?v0 鐨勫樊寮?*锛歷0 鏃犱紭鍏堢骇姒傚康锛坒ilter 鎸?push 搴忔墽琛岋級銆偮?.15 寮曞叆纭畾鎬ф帓搴忥紝浣嗕笉鏀瑰彉 v0 鐨?handler 鎵ц椤哄簭璇箟銆?
 ---
 
-## 8. 分发管线（Dispatch Pipeline）
-
-本节把 §7.8 的 `send/broadcast` 从"签名"展开为**逐步可实现的执行语义**：每一步做什么、顺序、断言、trace 记录、结果判定。编码子agent 依此写 `CtDispatcher::send/broadcast` 的实现，不得自行发明步骤或顺序。
-
-**管线总览**（同步路径，§8.1/§8.2 详述；异步路径 §10 复用同一管线，只是入口换成队列排空）：
-
+## 8. 鍒嗗彂绠＄嚎锛圖ispatch Pipeline锛?
+鏈妭鎶?搂7.8 鐨?`send/broadcast` 浠?绛惧悕"灞曞紑涓?*閫愭鍙疄鐜扮殑鎵ц璇箟**锛氭瘡涓€姝ュ仛浠€涔堛€侀『搴忋€佹柇瑷€銆乼race 璁板綍銆佺粨鏋滃垽瀹氥€傜紪鐮佸瓙agent 渚濇鍐?`CtDispatcher::send/broadcast` 鐨勫疄鐜帮紝涓嶅緱鑷鍙戞槑姝ラ鎴栭『搴忋€?
+**绠＄嚎鎬昏**锛堝悓姝ヨ矾寰勶紝搂8.1/搂8.2 璇﹁堪锛涘紓姝ヨ矾寰?搂10 澶嶇敤鍚屼竴绠＄嚎锛屽彧鏄叆鍙ｆ崲鎴愰槦鍒楁帓绌猴級锛?
 ```mermaid
 flowchart LR
-    A["send(broadcast) 入口"] --> B["线程归属断言<br/>(§8.1 step 1)"]
-    B --> C["COW 快照取用<br/>(§8.1 step 2)"]
+    A["send(broadcast) 鍏ュ彛"] --> B["绾跨▼褰掑睘鏂█<br/>(搂8.1 step 1)"]
+    B --> C["COW 蹇収鍙栫敤<br/>(搂8.1 step 2)"]
     C --> D["observers(pre)<br/>kObserved"]
-    D --> E["filters 按优先级<br/>kFiltered (拦截即停)"]
-    E --> F["handlers 定向/广播<br/>kDelivered (首个 accept 停)"]
+    D --> E["filters 鎸変紭鍏堢骇<br/>kFiltered (鎷︽埅鍗冲仠)"]
+    E --> F["handlers 瀹氬悜/骞挎挱<br/>kDelivered (棣栦釜 accept 鍋?"]
     F --> G["observers(post)<br/>kObserved"]
-    G --> H["汇总 CtDispatchResult<br/>+ trace 记录"]
+    G --> H["姹囨€?CtDispatchResult<br/>+ trace 璁板綍"]
 ```
 
-固定不变式（全管线，任何实现必须遵守）：
+鍥哄畾涓嶅彉寮忥紙鍏ㄧ绾匡紝浠讳綍瀹炵幇蹇呴』閬靛畧锛夛細
 
-1. **每事件一条序列号**：`send/broadcast` 入口为该事件分配 `event.sequence()`（§8.2 详述），全管线（含 observer 回调内）可见且不变。
-2. **一次快照贯穿全程**：进入管线取一次 `std::atomic_load(&m_tables)` 快照，所有表查找针对该快照——**分发中发生的注册/注销不影响本次分发的视图**（§6.5、§8.4）。
-3. **观察者绝不改变结果**：`observers(pre)` 抛出的异常向上传播（观察者是用户代码，不吞异常）；但它不能改变 `CtDispatchResult`、不能拦截、不能改 `event`（只读 `const CtEvent<T>&`）。
-4. **过滤器拦截即短路**：任一 filter 返回 true → 立即记 `kFiltered`、返回 `kFiltered`，**不再执行任何 handler 与 observers(post)**（v0 语义保留）。
-5. **handler accept 语义**：handler 通过 `event.accept()` / `event.ignore()` 表达是否消费（v0 的 `CtEvent::accept/ignore` 保留，§7.3）。**首个 accept 的 handler 停止后续 delivery**（定向 send）；broadcast 例外见 §8.2。
-6. **热路径零堆分配**：管线内不得出现 `new`、`std::function` 构造、`std::string` 构造（观察者/filter/handler 内部由用户负责；框架侧零分配）。`CtDispatchContext` 栈上构造、trace 环零分配（§7.9）。
+1. **姣忎簨浠朵竴鏉″簭鍒楀彿**锛歚send/broadcast` 鍏ュ彛涓鸿浜嬩欢鍒嗛厤 `event.sequence()`锛埪?.2 璇﹁堪锛夛紝鍏ㄧ绾匡紙鍚?observer 鍥炶皟鍐咃級鍙涓斾笉鍙樸€?2. **涓€娆″揩鐓ц疮绌垮叏绋?*锛氳繘鍏ョ绾垮彇涓€娆?`std::atomic_load(&m_tables)` 蹇収锛屾墍鏈夎〃鏌ユ壘閽堝璇ュ揩鐓р€斺€?*鍒嗗彂涓彂鐢熺殑娉ㄥ唽/娉ㄩ攢涓嶅奖鍝嶆湰娆″垎鍙戠殑瑙嗗浘**锛埪?.5銆伮?.4锛夈€?3. **瑙傚療鑰呯粷涓嶆敼鍙樼粨鏋?*锛歚observers(pre)` 鎶涘嚭鐨勫紓甯稿悜涓婁紶鎾紙瑙傚療鑰呮槸鐢ㄦ埛浠ｇ爜锛屼笉鍚炲紓甯革級锛涗絾瀹冧笉鑳芥敼鍙?`CtDispatchResult`銆佷笉鑳芥嫤鎴€佷笉鑳芥敼 `event`锛堝彧璇?`const CtEvent<T>&`锛夈€?4. **杩囨护鍣ㄦ嫤鎴嵆鐭矾**锛氫换涓€ filter 杩斿洖 true 鈫?绔嬪嵆璁?`kFiltered`銆佽繑鍥?`kFiltered`锛?*涓嶅啀鎵ц浠讳綍 handler 涓?observers(post)**锛坴0 璇箟淇濈暀锛夈€?5. **handler accept 璇箟**锛歨andler 閫氳繃 `event.accept()` / `event.ignore()` 琛ㄨ揪鏄惁娑堣垂锛坴0 鐨?`CtEvent::accept/ignore` 淇濈暀锛屄?.3锛夈€?*棣栦釜 accept 鐨?handler 鍋滄鍚庣画 delivery**锛堝畾鍚?send锛夛紱broadcast 渚嬪瑙?搂8.2銆?6. **鐑矾寰勯浂鍫嗗垎閰?*锛氱绾垮唴涓嶅緱鍑虹幇 `new`銆乣std::function` 鏋勯€犮€乣std::string` 鏋勯€狅紙瑙傚療鑰?filter/handler 鍐呴儴鐢辩敤鎴疯礋璐ｏ紱妗嗘灦渚ч浂鍒嗛厤锛夈€俙CtDispatchContext` 鏍堜笂鏋勯€犮€乼race 鐜浂鍒嗛厤锛埪?.9锛夈€?
+### 8.1 send<T> 閫愭璇箟锛堝悓姝ュ畾鍚戝垎鍙戯級
 
-### 8.1 send<T> 逐步语义（同步定向分发）
+`send(receiver, event)`锛氭妸 `CtEvent<T>` **鍚屾**鎶曢€掔粰涓€涓寚瀹氭帴鏀惰€呯殑 handler銆俀t 瀵瑰簲鐗╋細`QCoreApplication::sendEvent` + `QObject::event()`銆傞€愭璇箟濡備笅锛堢紪鐮佸瓙agent 閫愭潯瀹炵幇锛夛細
 
-`send(receiver, event)`：把 `CtEvent<T>` **同步**投递给一个指定接收者的 handler。Qt 对应物：`QCoreApplication::sendEvent` + `QObject::event()`。逐步语义如下（编码子agent 逐条实现）：
+**Step 0 鈥?缂栬瘧鏈熸牎楠?*锛歚static_assert(EventSet::template contains<T>)`锛埪?.8 濂戠害 #1锛夈€傛ā鏉垮疄渚嬪寲鍗冲け璐ャ€?
+**Step 1 鈥?绾跨▼褰掑睘鏂█锛圧ev 2, P1-6 宸插榻愮鍚?+ Rev 11, P1-1 鍙屾柇瑷€锛?*锛?- 鍙?`receiver->affinityThread()`锛埪?.5 鍐呭祵 `CtThreadAffinity`锛屄?.14锛夈€?- **鍙屾柇瑷€锛圧ev 11, P1-1锛?*锛歚if (!receiver->assertSameThread() || !this->assertSameThread())`锛歞ebug 鏋勫缓鐩存帴 `assert` 缁堟锛況elease 鏋勫缓杩斿洖 `kUnhandled`锛屽苟**璁颁竴娆?`kWrongThread` 閿欒鍒?trace/鏃ュ織**锛埪?.13 濂戠害 #5锛夛紝**涓嶆墽琛屽悗缁换浣曟楠?*銆?  - `receiver->assertSameThread()`锛毬?.5 鍐呭祵 `CtThreadAffinity` 鏂规硶鈥斺€旂紪鐮佸瓙agent 鐩存帴鍦?`CtReceiver` 涓婂疄鐜?璋冪敤锛?*涓嶅緱**鏀硅皟 `receiver->affinityThread().assertSameThread()`锛堝悗鑰呬笉鍏紑锛夈€?  - `this->assertSameThread()`锛歚CtDispatcherBase::assertSameThread()`锛埪?.8 鍐呭祵 affinity锛夆€斺€?*dispatcher 鐨?`m_trace` 鏄弗鏍煎崟绾跨▼瀵硅薄锛埪?.9 濂戠害 #1锛?*锛宻end 绠＄嚎 Step 3/4/5/6/7 浼氬啓瀹冿紱鑻ヤ笉鏂█ dispatcher 褰掑睘锛孉 绾跨▼寤?dispatcher銆丅 绾跨▼寤?receiver 骞朵粠 B 绾跨▼ `send` 浼氳法绾跨▼鍐?trace锛坉ata race锛夈€?*鍙屾柇瑷€闅愬惈 "receiver 蹇呴』鍒涘缓浜?dispatcher 褰掑睘绾跨▼"**锛埪?0.2 瑙勫垯 #1锛夈€?- 璇箟锛歚send` 鍙湪"褰撳墠绾跨▼ == receiver 鍒涘缓绾跨▼ **涓?* == dispatcher 鍒涘缓绾跨▼"鏃跺悎娉曘€?*璺ㄧ嚎绋嬫姇閫掕鐢?`post/postTo`锛埪?0锛夛紝涓嶆槸 `send`**鈥斺€斿懡鍚嶅嵆璇箟锛堢户鎵跨害鏉?#3锛夈€?
+**Step 2 鈥?鍙?COW 蹇収**锛歚auto tables = std::atomic_load(&m_tables);`锛埪?.5 璇昏矾寰勶級銆傛鍚庡叏绠＄嚎瀵硅蹇収鍙銆?
+**Step 3 鈥?鍒嗛厤搴忓垪鍙?+ 澶嶄綅 accepted锛圧ev 4, P2-10 鍥炲啓 + Rev 9, P1-1 寮傛渚嬪 + Rev 12, P3 鏄惧紡鍖栵級**锛歚event.setSequence(++m_nextSequence)`锛埪?.8 `CtDispatcherBase::m_nextSequence`锛屽悓姝ヨ矾寰勫崟绾跨▼璁块棶锛夛紱**灏?`event.accepted` 澶嶄綅涓?`false`**锛埪?.3 濂戠害 #6鈥斺€斾簨浠跺彲鑳借澶嶇敤/閲嶆姇锛屽垎鍙戝叆鍙ｄ繚璇佸共鍑€璧风偣锛夛紱鍚屼竴姝ヨ trace `kDispatched`锛坄objectId = receiver->objectId()`锛夈€?*寮傛渚嬪锛圧ev 9, P1-1锛?*锛氬綋鏈绾跨敱 `dispatchAny`锛堝紓姝ユ帓绌猴級椹卞姩鏃讹紝**璺宠繃 sequence 閲嶈祴鍊?*鈥斺€攑ending 璁板綍宸插湪 push 渚?stamp 鍏ラ槦搴忥紙`CtQueue` 鐨?`m_seqCounter`锛屄?.10 濂戠害 #9锛夛紝trace 鐨?`kDispatched` 鐢ㄨ鍏ラ槦搴忥紱`accepted` 澶嶄綅涓?`kDispatched` 璁板綍淇濈暀銆傚悓姝ュ叆鍙ｏ紙`send`锛夋墠鎵ц sequence 閲嶈祴鍊笺€?
+**Step 4 鈥?observers(pre)**锛氶亶鍘嗗揩鐓т腑 `CtTypeKey<T>` 鐨?observers 鍚戦噺锛岄€愪釜浠?`(const CtEvent<T>&, CtDispatchContext{phase=kObserved, receiverId, filterIndex=0, elapsed})` 璋冪敤锛埪?.6锛夈€傛瘡涓?observer 鍥炶皟鍚庤涓€娆?trace `kObserved`銆?*瑙傚療鑰呬笉寰楁敼 event**銆?
+**Step 5 鈥?filters锛堟寜浼樺厛绾э級**锛?- 鍙栧揩鐓т腑 `CtTypeKey<T>` 鐨?filters 鍚戦噺锛?*宸叉寜 `(CtHandlerPriority 闄嶅簭, id 鍗囧簭)` 鎺掑簭**锛屄?.15 濂戠害 #2鈥斺€斿疄鐜颁笉寰楀湪鍒嗗彂鏃剁幇鍦烘帓搴忥級銆?- 浠?`filterIndex = 1` 寮€濮嬮€愪釜璋冪敤 `CtFilter<T>`锛堣繑鍥?`bool`锛夈€?  - 杩斿洖 `true` 鈫?璁?trace `kFiltered`锛坄filterIndex` 鍗冲綋鍓嶅簭鍙凤紝`ctx.filterIndex()` 濉厖锛夛紝杩斿洖 `CtDispatchResult::kFiltered`鈥斺€?*鐭矾**锛孲tep 6/7 涓嶆墽琛屻€?  - 杩斿洖 `false` 鈫?`filterIndex++` 缁х画銆?- 鍏ㄩ儴杩斿洖 `false` 鈫?杩涘叆 Step 6銆?- **杩囨护鍣ㄥ簭鍙疯涔?*锛歚CtDispatchContext::filterIndex()`锛埪?.6锛夎褰?绗嚑涓?filter 瑙﹀彂浜嗘嫤鎴?锛堟嫤鎴椂锛夋垨"褰撳墠璇勪及鍒扮鍑犱釜"锛堣瀵熻€呰瑙掞級锛?*瀹冩槸鎵ц搴忎腑鐨?1 鍩轰綅缃紝涓嶆槸娉ㄥ唽 id**銆倀race 璁板綍鍚屽€笺€?
+**Step 6 鈥?handlers锛堝畾鍚戞煡鎵撅紝Rev 4, P2-12 绛栫暐瀹氭锛?*锛?- 蹇収涓?`CtTypeKey<T>` 鐨?handlers 鍚戦噺**鎸夋敞鍐岄『搴忓瓨鍌ㄣ€佷笉鎸?receiver 棰勫垎缁?*锛埪?.5 `HandlerEntry::receiver` 鐨?`weak_ptr`锛夈€?*M1 瀹氬悜鏌ユ壘绛栫暐瀹氭涓猴細绾挎€ч亶鍘嗗揩鐓у悜閲忥紝`lock()` 姣忎釜 `weak_ptr<CtReceiver>` 鍚庢瘮瀵?`objectId`**鈥斺€擬1 瑙勬ā涓嬬嚎鎬ч亶鍘嗗彲鎺ュ彈锛堟瘡鎺ユ敹鑰呮瘡绫诲瀷 handler 鏁板皯锛夛紱M4 鑻ュ墫鏋愯瘉鏄庨渶瑕侊紝鍙紩鍏?鎸?receiver 鍒嗙粍绱㈠紩"锛埪?4 寮€鏀鹃棶棰?#6锛夈€?- 瀵瑰懡涓殑 handler 閫愪釜锛?*鎸夋敞鍐岄『搴?*锛屄?.15 濂戠害 #3锛夎皟鐢細
+  - `lock()` 璇?`weak_ptr<CtReceiver>`锛涘け璐ワ紙receiver 宸蹭骸锛夆啋 璺宠繃璇ユ潯鐩紙搂8.4 璇﹁堪锛夈€?  - 璋冪敤 `handler(event)`锛坄CtEvent<T>&` 闈?const鈥斺€攈andler 鍙?`accept()/ignore()`锛夈€?  - 鑻?`event.accepted == true` 鈫?璁?trace `kDelivered`锛岃繑鍥?`CtDispatchResult::kHandled`鈥斺€?*鍋滄**锛堥涓?accept 鍋滄鍚庣画 handler锛夈€?  - 鑻?`event.accepted == false` 鈫?璁?trace `kDelivered`锛堜粛璁板綍璇ユ鎶曢€掞級锛岀户缁笅涓€涓?handler銆?- 鏃犲懡涓潯鐩垨鍏ㄩ儴 handler 鏈?accept 鈫?璁?trace `kDelivered`锛堟棤锛夋垨鎸?搂8.2 鍐冲畾锛岃繑鍥?`kUnhandled`銆?
+**Step 7 鈥?observers(post)**锛歨andlers 鎵ц瀹屾瘯鍚庯紙鏃犺 accept 涓庡惁锛夛紝閬嶅巻 observers 鍐嶈皟鐢ㄤ竴娆★紝鐩镐綅 `kObserved`銆乣ctx.filterIndex()=0`銆乣receiverId` 鍚?Step 4銆?*涓嶆敼鍙樼粨鏋?*锛堢户鎵跨害鏉?#4锛夈€?
+**Step 8 鈥?杩斿洖缁撴灉**锛歚kHandled`锛堚墺1 handler accept锛? `kUnhandled`锛堟棤 accept 鎴?receiver 宸蹭骸锛? `kFiltered`锛圫tep 5 鐭矾锛夈€?*`kNoReceiver` 浠?broadcast 鐢?*锛埪?.2锛夈€?
+**涓?v0 鐨勫樊寮?*锛歷0 鐨?`dispatch()` 鏃犲綊灞炴柇瑷€锛圫tep 1锛夈€佹棤 COW 蹇収锛圫tep 2锛屾瘡娆″垎鍙戞煡鍙彉琛級銆佹棤杩囨护鍣ㄥ簭鍙凤紙Step 5锛夈€乷bservers 涓嶅垎 pre/post锛圫tep 4/7 鍚堝苟涓轰竴娆★級锛涚幇鍦ㄥ洓鑰呰ˉ榻愩€?
+### 8.2 broadcast<T> 閫愭璇箟锛堝悓姝ュ箍鎾級
 
-**Step 0 — 编译期校验**：`static_assert(EventSet::template contains<T>)`（§7.8 契约 #1）。模板实例化即失败。
-
-**Step 1 — 线程归属断言（Rev 2, P1-6 已对齐签名 + Rev 11, P1-1 双断言）**：
-- 取 `receiver->affinityThread()`（§7.5 内嵌 `CtThreadAffinity`，§7.14）。
-- **双断言（Rev 11, P1-1）**：`if (!receiver->assertSameThread() || !this->assertSameThread())`：debug 构建直接 `assert` 终止；release 构建返回 `kUnhandled`，并**记一次 `kWrongThread` 错误到 trace/日志**（§7.13 契约 #5），**不执行后续任何步骤**。
-  - `receiver->assertSameThread()`：§7.5 内嵌 `CtThreadAffinity` 方法——编码子agent 直接在 `CtReceiver` 上实现/调用，**不得**改调 `receiver->affinityThread().assertSameThread()`（后者不公开）。
-  - `this->assertSameThread()`：`CtDispatcherBase::assertSameThread()`（§7.8 内嵌 affinity）——**dispatcher 的 `m_trace` 是严格单线程对象（§7.9 契约 #1）**，send 管线 Step 3/4/5/6/7 会写它；若不断言 dispatcher 归属，A 线程建 dispatcher、B 线程建 receiver 并从 B 线程 `send` 会跨线程写 trace（data race）。**双断言隐含 "receiver 必须创建于 dispatcher 归属线程"**（§10.2 规则 #1）。
-- 语义：`send` 只在"当前线程 == receiver 创建线程 **且** == dispatcher 创建线程"时合法。**跨线程投递请用 `post/postTo`（§10），不是 `send`**——命名即语义（继承约束 #3）。
-
-**Step 2 — 取 COW 快照**：`auto tables = std::atomic_load(&m_tables);`（§6.5 读路径）。此后全管线对该快照只读。
-
-**Step 3 — 分配序列号 + 复位 accepted（Rev 4, P2-10 回写 + Rev 9, P1-1 异步例外 + Rev 12, P3 显式化）**：`event.setSequence(++m_nextSequence)`（§7.8 `CtDispatcherBase::m_nextSequence`，同步路径单线程访问）；**将 `event.accepted` 复位为 `false`**（§7.3 契约 #6——事件可能被复用/重投，分发入口保证干净起点）；同一步记 trace `kDispatched`（`objectId = receiver->objectId()`）。**异步例外（Rev 9, P1-1）**：当本管线由 `dispatchAny`（异步排空）驱动时，**跳过 sequence 重赋值**——pending 记录已在 push 侧 stamp 入队序（`CtQueue` 的 `m_seqCounter`，§7.10 契约 #9），trace 的 `kDispatched` 用该入队序；`accepted` 复位与 `kDispatched` 记录保留。同步入口（`send`）才执行 sequence 重赋值。
-
-**Step 4 — observers(pre)**：遍历快照中 `CtTypeKey<T>` 的 observers 向量，逐个以 `(const CtEvent<T>&, CtDispatchContext{phase=kObserved, receiverId, filterIndex=0, elapsed})` 调用（§7.6）。每个 observer 回调后记一次 trace `kObserved`。**观察者不得改 event**。
-
-**Step 5 — filters（按优先级）**：
-- 取快照中 `CtTypeKey<T>` 的 filters 向量（**已按 `(CtHandlerPriority 降序, id 升序)` 排序**，§7.15 契约 #2——实现不得在分发时现场排序）。
-- 从 `filterIndex = 1` 开始逐个调用 `CtFilter<T>`（返回 `bool`）。
-  - 返回 `true` → 记 trace `kFiltered`（`filterIndex` 即当前序号，`ctx.filterIndex()` 填充），返回 `CtDispatchResult::kFiltered`——**短路**，Step 6/7 不执行。
-  - 返回 `false` → `filterIndex++` 继续。
-- 全部返回 `false` → 进入 Step 6。
-- **过滤器序号语义**：`CtDispatchContext::filterIndex()`（§7.6）记录"第几个 filter 触发了拦截"（拦截时）或"当前评估到第几个"（观察者视角）；**它是执行序中的 1 基位置，不是注册 id**。trace 记录同值。
-
-**Step 6 — handlers（定向查找，Rev 4, P2-12 策略定死）**：
-- 快照中 `CtTypeKey<T>` 的 handlers 向量**按注册顺序存储、不按 receiver 预分组**（§6.5 `HandlerEntry::receiver` 的 `weak_ptr`）。**M1 定向查找策略定死为：线性遍历快照向量，`lock()` 每个 `weak_ptr<CtReceiver>` 后比对 `objectId`**——M1 规模下线性遍历可接受（每接收者每类型 handler 数少）；M4 若剖析证明需要，可引入"按 receiver 分组索引"（§14 开放问题 #6）。
-- 对命中的 handler 逐个（**按注册顺序**，§7.15 契约 #3）调用：
-  - `lock()` 该 `weak_ptr<CtReceiver>`；失败（receiver 已亡）→ 跳过该条目（§8.4 详述）。
-  - 调用 `handler(event)`（`CtEvent<T>&` 非 const——handler 可 `accept()/ignore()`）。
-  - 若 `event.accepted == true` → 记 trace `kDelivered`，返回 `CtDispatchResult::kHandled`——**停止**（首个 accept 停止后续 handler）。
-  - 若 `event.accepted == false` → 记 trace `kDelivered`（仍记录该次投递），继续下一个 handler。
-- 无命中条目或全部 handler 未 accept → 记 trace `kDelivered`（无）或按 §8.2 决定，返回 `kUnhandled`。
-
-**Step 7 — observers(post)**：handlers 执行完毕后（无论 accept 与否），遍历 observers 再调用一次，相位 `kObserved`、`ctx.filterIndex()=0`、`receiverId` 同 Step 4。**不改变结果**（继承约束 #4）。
-
-**Step 8 — 返回结果**：`kHandled`（≥1 handler accept）/ `kUnhandled`（无 accept 或 receiver 已亡）/ `kFiltered`（Step 5 短路）。**`kNoReceiver` 仅 broadcast 用**（§8.2）。
-
-**与 v0 的差异**：v0 的 `dispatch()` 无归属断言（Step 1）、无 COW 快照（Step 2，每次分发查可变表）、无过滤器序号（Step 5）、observers 不分 pre/post（Step 4/7 合并为一次）；现在四者补齐。
-
-### 8.2 broadcast<T> 逐步语义（同步广播）
-
-`broadcast(event)`：把 `CtEvent<T>` **同步**投递给该类型**所有存活接收者**的 handler（发布-订阅）。Qt 对应物：`QApplication::sendEvent` 对所有目标——更接近 Qt 信号槽的"多接收者"形态。逐步语义如下：
-
-**Step 0 — 编译期校验**：同 §8.1 Step 0。
-
-**Step 1 — 线程归属断言（Rev 2, P1-6 已对齐签名）**：`broadcast` 无单一接收者，归属判定基准是 **dispatcher 自身的归属线程**（`CtDispatcherBase` 内嵌 `CtThreadAffinity m_affinity`，构造时记录——见 §7.8/§7.14/§10.2）。调用 `this->assertSameThread()`（**即 §7.8 Rev 2 新增的 `CtDispatcherBase::assertSameThread()`**）：debug 断言；release 返回 `kUnhandled` 并记 `kWrongThread`。语义：**broadcast 只能在 dispatcher 创建线程调用**——与 send 的"receiver 归属线程"不同基准，编码子agent 注意区分。
-
-**Step 2 — 取 COW 快照**：同 §8.1 Step 2。
-
-**Step 3 — 分配序列号 + 记 `kDispatched`**：同 §8.1 Step 3（`event.setSequence(++m_nextSequence)`），但 `objectId = 0`（无单一目标）。**异步例外（Rev 10, P3）**：`dispatchAny` 对广播 pending 走本节语义时，**继承 §8.1 Step 3 的异步例外**——跳过 sequence 重赋值（pending 已 stamp 入队序），保留 `accepted` 复位与 `kDispatched` 记录。
-
-**Step 4 — observers(pre)**：同 §8.1 Step 4，`receiverId = 0`。
-
-**Step 5 — filters（按优先级）**：同 §8.1 Step 5。任一 filter 拦截 → `kFiltered` 短路，**后续 handler 全部不执行**（广播同样受过滤器约束）。
-
-**Step 6 — handlers（广播全表，Rev 8, P1-3 判空修正）**：
-- 遍历快照中 `CtTypeKey<T>` 的 **全部** handler 条目（不按 receiver 过滤——`HandlerEntry::receiver == null` 时即广播条目，§6.5 注明"or null = broadcast"）。
-- 逐个 handler：
-  - **广播条目（receiver 为空）→ 无条件调用**（注册时固化判空，§6.5 `HandlerEntry` 语义——空 = 广播、非空 = 定向）。**不得用 `lock()` 失败跳过广播条目**：空 `weak_ptr` 的 `lock()` 也返回 null（与"已亡"无法区分），会把广播专用 handler 静默跳过（Rev 8, P1-3——与异步 `isBroadcast` 同型问题）。判定：`receiver` 为空（`owner_before` 判空，§6.1 方案）→ 调用；非空且 `lock()` 失败（已亡）→ 跳过，**继续下一个**（广播不因单个失效 receiver 短路）。
-  - 调用 `handler(event)`。
-  - **广播的 accept 语义（与 send 不同）**：**不因某个 handler accept 而停止**——所有 handler 都收到事件（发布-订阅：每个人都消费副本语义，但框架只投递一份引用、由 handler 各自决定 accept/ignore；结果取 OR）。`event.accepted` 累积 OR：任一 handler accept → 最终 `kHandled`。
-- 遍历完成后，若无任何存活 receiver 的 handler 被调用 → 返回 `kNoReceiver`（信息性，§7.3 契约 #5）；否则按 accept OR 返回 `kHandled` / `kUnhandled`。
-- 每调用一个 handler 记一次 trace `kDelivered`（`objectId = 该 handler 的 receiver->objectId()`，广播条目记 0）。
-
-**Step 7 — observers(post)**：同 §8.1 Step 7（`receiverId = 0`）。所有 handler 执行完毕后调用，不改变结果。
-
-**Step 8 — 返回结果**：`kHandled`（≥1 accept）/ `kUnhandled`（全未 accept）/ `kNoReceiver`（快照中无存活目标）/ `kFiltered`（Step 5 短路）。
-
-**与 v0 的差异**：v0 的 `dispatch(receiver=nullptr)` 已实现"广播到全表"（§3 评估引用的 v0 代码），但**无归属断言、无 COW 快照、无结果 OR 语义的显式定义**；§8.2 将这三者定死。v0 的 `kConsumed/kIgnored` 改名为 `kHandled/kUnhandled`（§7.3 契约 #5）。
-
-### 8.3 观察者拆分与过滤器序号（Observers pre/post & filter ordinal）
-
-**问题**：v0 的 `CtObserver<T>` 只在管线开始调一次，无法区分"分发前"与"分发后"；trace 也没有"第几个过滤器"的概念。§7.6 的 `CtDispatchContext` 与 §7.9 的相位已为二者留位，本节定死填充规则。
-
-**观察者 pre/post 拆分**：
-
-1. **同一份 observers 向量、两次回调**：注册一个 observer（§7.8 `addObserver<T>`）后，它在每次分发中**被调用两次**——Step 4（pre）与 Step 7（post）。区分信号是 `CtDispatchContext::phase()`：
-   - pre 回调：`phase == kObserved`，`receiverId` 已填（send 定向）或 0（broadcast），`filterIndex == 0`（filter 尚未跑）。
-   - post 回调：`phase == kObserved`，`filterIndex == 0`（filter 已跑完），`elapsed()` 反映全管线耗时。
-2. **观察者无法伪造上下文**：`CtDispatchContext` 仅由 dispatcher 构造（friend，§7.6 契约）。**编码子agent 注意**：同一个 `CtDispatchContext` 值在 pre 与 post 回调中**不得复用同一实例**——每回调构造一个新的（栈上、零分配）；仅 `elapsed` 语义延续（Step 4 的 ctx 记 pre 耗时，Step 7 的 ctx 记全管线耗时）。
-3. **拦截时不触发 post**：filter 拦截（Step 5 短路）后 **observers(post) 不执行**——post 观察者看到的是"成功走完 handler 阶段"的事件。被拦截事件只留 `kDispatched/kFiltered` 两条 trace（+pre 观察者记录）。这是**有意的语义**：post 观察者不应对未投递事件误报"已投递"。
-4. **异常传播**：pre/post 观察者抛出的异常都向上传播（不吞）；被拦截的路径上 pre 观察者已抛出的异常同样传播。异常路径不记 `kDelivered`。
-
-**过滤器序号进 `CtDispatchContext`**：
-
-1. **填充者唯一**：`filterIndex()` 只由 dispatcher 在 Step 5 填充（§8.1）。**其他步骤恒为 0**。
-2. **序号定义**：1 基、执行序位置（§7.15 契约 #2）。若快照中该类型有 5 个 filter（已排序），第 3 个被评估时 `filterIndex()==3`；它拦截则 trace `kFiltered` 携带 `ctx.filterIndex()==3`。
-3. **消费方**：trace（§7.9 `record` 内嵌 ctx）与测试断言（"第 2 个 filter 拦截"可断言 `ctx.filterIndex()==2`）；观察者可用它识别"哪个 filter 拦住了我的事件"。
-4. **与 `filterSeq` 的区分**：§6.5 `FilterEntry::filterSeq` 是用户赋序（次级排序键，§7.15 契约 #4），`filterIndex()` 是**实际执行位置**——两者在存在同优先级 filter 时可能不同，**编码子agent 不得把二者混用**。
-
-**与 v0 的差异**：v0 观察者只回调一次、无 pre/post 之分、无上下文；现在观察者获得两阶段、携带 `filterIndex/elapsed/receiverId` 的只读上下文（§7.6 契约）。
-
-### 8.4 send 与 token 注销的交互（COW 快照期间的注销）
-
-**问题**：分发进行中（已取快照），另一线程（或同一分发内的 handler 回调）注销了一个 handler——本次分发还能看到它吗？语义必须确定，编码子agent 不得含糊。
-
-**契约**（继承 §6.5 的 COW 不变量）：
-
-1. **快照内仍可见**：注销 = 写路径（持 `m_writeMutex` 拷贝-修改-发布新快照，§6.5）。**本次分发持有的旧快照不变**——已注销的 handler 在本快照内**仍然可见、仍会被调用**（若 receiver 仍存活）。这是 COW 的必然结果，**不是 bug**。
-2. **下次分发不可见**：下一次 `send/broadcast` 取到新快照，已注销条目消失。**"注销即时生效"只在两次分发的边界**，不在分发中途。
-3. **receiver 已亡的弱引用**：`HandlerEntry` 存 `weak_ptr<CtReceiver>`（§6.5）。即使快照中还留着该条目，分发时 `lock()` 失败 → 跳过（§8.1 Step 6 / §8.2 Step 6）。**这是双重保险**：token 注销（快照层）与 weak_ptr 失效（运行时层）共同保证无悬垂调用。
-4. **同分发内 handler 自我注销**：handler 回调内部析构自己的 token → 触发写路径 COW 发布。**但当前分发继续用旧快照**，后续 handler 仍按旧快照执行——**当前分发完成前，本次投递序列不变**。这是"分发一致性视图"的直接推论，文档固定此行为，测试须覆盖（§13）。
-5. **token 比 dispatcher 长寿**：dispatcher 析构翻转所有 `CtTokenState::alive`（§6.4/§7.7 契约 #3），之后 token 析构静默跳过——**分发中 dispatcher 被析构属于应用层错误**（dispatcher 生命周期必须长于所有在途分发；§14 开放问题确认），框架不做防护但文档声明 UB 边界。
-6. **编码子agent 落地要点**：`send/broadcast` 全程只读 `snapshot()` 返回的 `shared_ptr<const CtDispatchTables>`，**不得在分发中调用 `atomic_store` 或触碰 `m_writeMutex`**；`lock()` 失败跳过是分发内唯一的"表外"检查。
-
+`broadcast(event)`锛氭妸 `CtEvent<T>` **鍚屾**鎶曢€掔粰璇ョ被鍨?*鎵€鏈夊瓨娲绘帴鏀惰€?*鐨?handler锛堝彂甯?璁㈤槄锛夈€俀t 瀵瑰簲鐗╋細`QApplication::sendEvent` 瀵规墍鏈夌洰鏍団€斺€旀洿鎺ヨ繎 Qt 淇″彿妲界殑"澶氭帴鏀惰€?褰㈡€併€傞€愭璇箟濡備笅锛?
+**Step 0 鈥?缂栬瘧鏈熸牎楠?*锛氬悓 搂8.1 Step 0銆?
+**Step 1 鈥?绾跨▼褰掑睘鏂█锛圧ev 2, P1-6 宸插榻愮鍚嶏級**锛歚broadcast` 鏃犲崟涓€鎺ユ敹鑰咃紝褰掑睘鍒ゅ畾鍩哄噯鏄?**dispatcher 鑷韩鐨勫綊灞炵嚎绋?*锛坄CtDispatcherBase` 鍐呭祵 `CtThreadAffinity m_affinity`锛屾瀯閫犳椂璁板綍鈥斺€旇 搂7.8/搂7.14/搂10.2锛夈€傝皟鐢?`this->assertSameThread()`锛?*鍗?搂7.8 Rev 2 鏂板鐨?`CtDispatcherBase::assertSameThread()`**锛夛細debug 鏂█锛況elease 杩斿洖 `kUnhandled` 骞惰 `kWrongThread`銆傝涔夛細**broadcast 鍙兘鍦?dispatcher 鍒涘缓绾跨▼璋冪敤**鈥斺€斾笌 send 鐨?receiver 褰掑睘绾跨▼"涓嶅悓鍩哄噯锛岀紪鐮佸瓙agent 娉ㄦ剰鍖哄垎銆?
+**Step 2 鈥?鍙?COW 蹇収**锛氬悓 搂8.1 Step 2銆?
+**Step 3 鈥?鍒嗛厤搴忓垪鍙?+ 璁?`kDispatched`**锛氬悓 搂8.1 Step 3锛坄event.setSequence(++m_nextSequence)`锛夛紝浣?`objectId = 0`锛堟棤鍗曚竴鐩爣锛夈€?*寮傛渚嬪锛圧ev 10, P3锛?*锛歚dispatchAny` 瀵瑰箍鎾?pending 璧版湰鑺傝涔夋椂锛?*缁ф壙 搂8.1 Step 3 鐨勫紓姝ヤ緥澶?*鈥斺€旇烦杩?sequence 閲嶈祴鍊硷紙pending 宸?stamp 鍏ラ槦搴忥級锛屼繚鐣?`accepted` 澶嶄綅涓?`kDispatched` 璁板綍銆?
+**Step 4 鈥?observers(pre)**锛氬悓 搂8.1 Step 4锛宍receiverId = 0`銆?
+**Step 5 鈥?filters锛堟寜浼樺厛绾э級**锛氬悓 搂8.1 Step 5銆備换涓€ filter 鎷︽埅 鈫?`kFiltered` 鐭矾锛?*鍚庣画 handler 鍏ㄩ儴涓嶆墽琛?*锛堝箍鎾悓鏍峰彈杩囨护鍣ㄧ害鏉燂級銆?
+**Step 6 鈥?handlers锛堝箍鎾叏琛紝Rev 8, P1-3 鍒ょ┖淇锛?*锛?- 閬嶅巻蹇収涓?`CtTypeKey<T>` 鐨?**鍏ㄩ儴** handler 鏉＄洰锛堜笉鎸?receiver 杩囨护鈥斺€擿HandlerEntry::receiver == null` 鏃跺嵆骞挎挱鏉＄洰锛屄?.5 娉ㄦ槑"or null = broadcast"锛夈€?- 閫愪釜 handler锛?  - **骞挎挱鏉＄洰锛坮eceiver 涓虹┖锛夆啋 鏃犳潯浠惰皟鐢?*锛堟敞鍐屾椂鍥哄寲鍒ょ┖锛屄?.5 `HandlerEntry` 璇箟鈥斺€旂┖ = 骞挎挱銆侀潪绌?= 瀹氬悜锛夈€?*涓嶅緱鐢?`lock()` 澶辫触璺宠繃骞挎挱鏉＄洰**锛氱┖ `weak_ptr` 鐨?`lock()` 涔熻繑鍥?null锛堜笌"宸蹭骸"鏃犳硶鍖哄垎锛夛紝浼氭妸骞挎挱涓撶敤 handler 闈欓粯璺宠繃锛圧ev 8, P1-3鈥斺€斾笌寮傛 `isBroadcast` 鍚屽瀷闂锛夈€傚垽瀹氾細`receiver` 涓虹┖锛坄owner_before` 鍒ょ┖锛屄?.1 鏂规锛夆啋 璋冪敤锛涢潪绌轰笖 `lock()` 澶辫触锛堝凡浜★級鈫?璺宠繃锛?*缁х画涓嬩竴涓?*锛堝箍鎾笉鍥犲崟涓け鏁?receiver 鐭矾锛夈€?  - 璋冪敤 `handler(event)`銆?  - **骞挎挱鐨?accept 璇箟锛堜笌 send 涓嶅悓锛?*锛?*涓嶅洜鏌愪釜 handler accept 鑰屽仠姝?*鈥斺€旀墍鏈?handler 閮芥敹鍒颁簨浠讹紙鍙戝竷-璁㈤槄锛氭瘡涓汉閮芥秷璐瑰壇鏈涔夛紝浣嗘鏋跺彧鎶曢€掍竴浠藉紩鐢ㄣ€佺敱 handler 鍚勮嚜鍐冲畾 accept/ignore锛涚粨鏋滃彇 OR锛夈€俙event.accepted` 绱Н OR锛氫换涓€ handler accept 鈫?鏈€缁?`kHandled`銆?- 閬嶅巻瀹屾垚鍚庯紝鑻ユ棤浠讳綍瀛樻椿 receiver 鐨?handler 琚皟鐢?鈫?杩斿洖 `kNoReceiver`锛堜俊鎭€э紝搂7.3 濂戠害 #5锛夛紱鍚﹀垯鎸?accept OR 杩斿洖 `kHandled` / `kUnhandled`銆?- 姣忚皟鐢ㄤ竴涓?handler 璁颁竴娆?trace `kDelivered`锛坄objectId = 璇?handler 鐨?receiver->objectId()`锛屽箍鎾潯鐩 0锛夈€?
+**Step 7 鈥?observers(post)**锛氬悓 搂8.1 Step 7锛坄receiverId = 0`锛夈€傛墍鏈?handler 鎵ц瀹屾瘯鍚庤皟鐢紝涓嶆敼鍙樼粨鏋溿€?
+**Step 8 鈥?杩斿洖缁撴灉**锛歚kHandled`锛堚墺1 accept锛? `kUnhandled`锛堝叏鏈?accept锛? `kNoReceiver`锛堝揩鐓т腑鏃犲瓨娲荤洰鏍囷級/ `kFiltered`锛圫tep 5 鐭矾锛夈€?
+**涓?v0 鐨勫樊寮?*锛歷0 鐨?`dispatch(receiver=nullptr)` 宸插疄鐜?骞挎挱鍒板叏琛?锛埪? 璇勪及寮曠敤鐨?v0 浠ｇ爜锛夛紝浣?*鏃犲綊灞炴柇瑷€銆佹棤 COW 蹇収銆佹棤缁撴灉 OR 璇箟鐨勬樉寮忓畾涔?*锛浡?.2 灏嗚繖涓夎€呭畾姝汇€倂0 鐨?`kConsumed/kIgnored` 鏀瑰悕涓?`kHandled/kUnhandled`锛埪?.3 濂戠害 #5锛夈€?
+### 8.3 瑙傚療鑰呮媶鍒嗕笌杩囨护鍣ㄥ簭鍙凤紙Observers pre/post & filter ordinal锛?
+**闂**锛歷0 鐨?`CtObserver<T>` 鍙湪绠＄嚎寮€濮嬭皟涓€娆★紝鏃犳硶鍖哄垎"鍒嗗彂鍓?涓?鍒嗗彂鍚?锛泃race 涔熸病鏈?绗嚑涓繃婊ゅ櫒"鐨勬蹇点€偮?.6 鐨?`CtDispatchContext` 涓?搂7.9 鐨勭浉浣嶅凡涓轰簩鑰呯暀浣嶏紝鏈妭瀹氭濉厖瑙勫垯銆?
+**瑙傚療鑰?pre/post 鎷嗗垎**锛?
+1. **鍚屼竴浠?observers 鍚戦噺銆佷袱娆″洖璋?*锛氭敞鍐屼竴涓?observer锛埪?.8 `addObserver<T>`锛夊悗锛屽畠鍦ㄦ瘡娆″垎鍙戜腑**琚皟鐢ㄤ袱娆?*鈥斺€擲tep 4锛坧re锛変笌 Step 7锛坧ost锛夈€傚尯鍒嗕俊鍙锋槸 `CtDispatchContext::phase()`锛?   - pre 鍥炶皟锛歚phase == kObserved`锛宍receiverId` 宸插～锛坰end 瀹氬悜锛夋垨 0锛坆roadcast锛夛紝`filterIndex == 0`锛坒ilter 灏氭湭璺戯級銆?   - post 鍥炶皟锛歚phase == kObserved`锛宍filterIndex == 0`锛坒ilter 宸茶窇瀹岋級锛宍elapsed()` 鍙嶆槧鍏ㄧ绾胯€楁椂銆?2. **瑙傚療鑰呮棤娉曚吉閫犱笂涓嬫枃**锛歚CtDispatchContext` 浠呯敱 dispatcher 鏋勯€狅紙friend锛屄?.6 濂戠害锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氬悓涓€涓?`CtDispatchContext` 鍊煎湪 pre 涓?post 鍥炶皟涓?*涓嶅緱澶嶇敤鍚屼竴瀹炰緥**鈥斺€旀瘡鍥炶皟鏋勯€犱竴涓柊鐨勶紙鏍堜笂銆侀浂鍒嗛厤锛夛紱浠?`elapsed` 璇箟寤剁画锛圫tep 4 鐨?ctx 璁?pre 鑰楁椂锛孲tep 7 鐨?ctx 璁板叏绠＄嚎鑰楁椂锛夈€?3. **鎷︽埅鏃朵笉瑙﹀彂 post**锛歠ilter 鎷︽埅锛圫tep 5 鐭矾锛夊悗 **observers(post) 涓嶆墽琛?*鈥斺€攑ost 瑙傚療鑰呯湅鍒扮殑鏄?鎴愬姛璧板畬 handler 闃舵"鐨勪簨浠躲€傝鎷︽埅浜嬩欢鍙暀 `kDispatched/kFiltered` 涓ゆ潯 trace锛?pre 瑙傚療鑰呰褰曪級銆傝繖鏄?*鏈夋剰鐨勮涔?*锛歱ost 瑙傚療鑰呬笉搴斿鏈姇閫掍簨浠惰鎶?宸叉姇閫?銆?4. **寮傚父浼犳挱**锛歱re/post 瑙傚療鑰呮姏鍑虹殑寮傚父閮藉悜涓婁紶鎾紙涓嶅悶锛夛紱琚嫤鎴殑璺緞涓?pre 瑙傚療鑰呭凡鎶涘嚭鐨勫紓甯稿悓鏍蜂紶鎾€傚紓甯歌矾寰勪笉璁?`kDelivered`銆?
+**杩囨护鍣ㄥ簭鍙疯繘 `CtDispatchContext`**锛?
+1. **濉厖鑰呭敮涓€**锛歚filterIndex()` 鍙敱 dispatcher 鍦?Step 5 濉厖锛埪?.1锛夈€?*鍏朵粬姝ラ鎭掍负 0**銆?2. **搴忓彿瀹氫箟**锛? 鍩恒€佹墽琛屽簭浣嶇疆锛埪?.15 濂戠害 #2锛夈€傝嫢蹇収涓绫诲瀷鏈?5 涓?filter锛堝凡鎺掑簭锛夛紝绗?3 涓璇勪及鏃?`filterIndex()==3`锛涘畠鎷︽埅鍒?trace `kFiltered` 鎼哄甫 `ctx.filterIndex()==3`銆?3. **娑堣垂鏂?*锛歵race锛埪?.9 `record` 鍐呭祵 ctx锛変笌娴嬭瘯鏂█锛?绗?2 涓?filter 鎷︽埅"鍙柇瑷€ `ctx.filterIndex()==2`锛夛紱瑙傚療鑰呭彲鐢ㄥ畠璇嗗埆"鍝釜 filter 鎷︿綇浜嗘垜鐨勪簨浠?銆?4. **涓?`filterSeq` 鐨勫尯鍒?*锛毬?.5 `FilterEntry::filterSeq` 鏄敤鎴疯祴搴忥紙娆＄骇鎺掑簭閿紝搂7.15 濂戠害 #4锛夛紝`filterIndex()` 鏄?*瀹為檯鎵ц浣嶇疆**鈥斺€斾袱鑰呭湪瀛樺湪鍚屼紭鍏堢骇 filter 鏃跺彲鑳戒笉鍚岋紝**缂栫爜瀛恆gent 涓嶅緱鎶婁簩鑰呮贩鐢?*銆?
+**涓?v0 鐨勫樊寮?*锛歷0 瑙傚療鑰呭彧鍥炶皟涓€娆°€佹棤 pre/post 涔嬪垎銆佹棤涓婁笅鏂囷紱鐜板湪瑙傚療鑰呰幏寰椾袱闃舵銆佹惡甯?`filterIndex/elapsed/receiverId` 鐨勫彧璇讳笂涓嬫枃锛埪?.6 濂戠害锛夈€?
+### 8.4 send 涓?token 娉ㄩ攢鐨勪氦浜掞紙COW 蹇収鏈熼棿鐨勬敞閿€锛?
+**闂**锛氬垎鍙戣繘琛屼腑锛堝凡鍙栧揩鐓э級锛屽彟涓€绾跨▼锛堟垨鍚屼竴鍒嗗彂鍐呯殑 handler 鍥炶皟锛夋敞閿€浜嗕竴涓?handler鈥斺€旀湰娆″垎鍙戣繕鑳界湅鍒板畠鍚楋紵璇箟蹇呴』纭畾锛岀紪鐮佸瓙agent 涓嶅緱鍚硦銆?
+**濂戠害**锛堢户鎵?搂6.5 鐨?COW 涓嶅彉閲忥級锛?
+1. **蹇収鍐呬粛鍙**锛氭敞閿€ = 鍐欒矾寰勶紙鎸?`m_writeMutex` 鎷疯礉-淇敼-鍙戝竷鏂板揩鐓э紝搂6.5锛夈€?*鏈鍒嗗彂鎸佹湁鐨勬棫蹇収涓嶅彉**鈥斺€斿凡娉ㄩ攢鐨?handler 鍦ㄦ湰蹇収鍐?*浠嶇劧鍙銆佷粛浼氳璋冪敤**锛堣嫢 receiver 浠嶅瓨娲伙級銆傝繖鏄?COW 鐨勫繀鐒剁粨鏋滐紝**涓嶆槸 bug**銆?2. **涓嬫鍒嗗彂涓嶅彲瑙?*锛氫笅涓€娆?`send/broadcast` 鍙栧埌鏂板揩鐓э紝宸叉敞閿€鏉＄洰娑堝け銆?*"娉ㄩ攢鍗虫椂鐢熸晥"鍙湪涓ゆ鍒嗗彂鐨勮竟鐣?*锛屼笉鍦ㄥ垎鍙戜腑閫斻€?3. **receiver 宸蹭骸鐨勫急寮曠敤**锛歚HandlerEntry` 瀛?`weak_ptr<CtReceiver>`锛埪?.5锛夈€傚嵆浣垮揩鐓т腑杩樼暀鐫€璇ユ潯鐩紝鍒嗗彂鏃?`lock()` 澶辫触 鈫?璺宠繃锛埪?.1 Step 6 / 搂8.2 Step 6锛夈€?*杩欐槸鍙岄噸淇濋櫓**锛歵oken 娉ㄩ攢锛堝揩鐓у眰锛変笌 weak_ptr 澶辨晥锛堣繍琛屾椂灞傦級鍏卞悓淇濊瘉鏃犳偓鍨傝皟鐢ㄣ€?4. **鍚屽垎鍙戝唴 handler 鑷垜娉ㄩ攢**锛歨andler 鍥炶皟鍐呴儴鏋愭瀯鑷繁鐨?token 鈫?瑙﹀彂鍐欒矾寰?COW 鍙戝竷銆?*浣嗗綋鍓嶅垎鍙戠户缁敤鏃у揩鐓?*锛屽悗缁?handler 浠嶆寜鏃у揩鐓ф墽琛屸€斺€?*褰撳墠鍒嗗彂瀹屾垚鍓嶏紝鏈鎶曢€掑簭鍒椾笉鍙?*銆傝繖鏄?鍒嗗彂涓€鑷存€ц鍥?鐨勭洿鎺ユ帹璁猴紝鏂囨。鍥哄畾姝よ涓猴紝娴嬭瘯椤昏鐩栵紙搂13锛夈€?5. **token 姣?dispatcher 闀垮**锛歞ispatcher 鏋愭瀯缈昏浆鎵€鏈?`CtTokenState::alive`锛埪?.4/搂7.7 濂戠害 #3锛夛紝涔嬪悗 token 鏋愭瀯闈欓粯璺宠繃鈥斺€?*鍒嗗彂涓?dispatcher 琚瀽鏋勫睘浜庡簲鐢ㄥ眰閿欒**锛坉ispatcher 鐢熷懡鍛ㄦ湡蹇呴』闀夸簬鎵€鏈夊湪閫斿垎鍙戯紱搂14 寮€鏀鹃棶棰樼‘璁わ級锛屾鏋朵笉鍋氶槻鎶や絾鏂囨。澹版槑 UB 杈圭晫銆?6. **缂栫爜瀛恆gent 钀藉湴瑕佺偣**锛歚send/broadcast` 鍏ㄧ▼鍙 `snapshot()` 杩斿洖鐨?`shared_ptr<const CtDispatchTables>`锛?*涓嶅緱鍦ㄥ垎鍙戜腑璋冪敤 `atomic_store` 鎴栬Е纰?`m_writeMutex`**锛沗lock()` 澶辫触璺宠繃鏄垎鍙戝唴鍞竴鐨?琛ㄥ"妫€鏌ャ€?
 ---
 
-## 9. 所有权与生命周期（Ownership & Lifetime）
+## 9. 鎵€鏈夋潈涓庣敓鍛藉懆鏈燂紙Ownership & Lifetime锛?
+鏈妭鎶?搂6.4/搂7.5/搂7.7/搂8.4 鐨勬墍鏈夋潈涓庣敓鍛藉懆鏈熻涔夋眹鎬讳负**涓嶅彉閲忔竻鍗?*鈥斺€旂紪鐮佸瓙agent 瀹炵幇鏋愭瀯璺緞銆佸洖鏀堕€昏緫涓?token 瀵硅处鏃朵互姝や负鍑嗐€傛墍鏈夋潯娆惧潎鏄墠鏂囧绾︾殑鎺ㄨ锛屼笉寮曞叆鏂版満鍒躲€?
+### 9.1 鎺ユ敹鑰呯敓鍛藉懆鏈燂紙shared_ptr 鎸佹湁 + weak_ptr 娉ㄥ唽锛?
+1. **鍞竴鎸佹湁璺緞**锛歚CtReceiver` 蹇呴』鐢?`std::shared_ptr` 鎸佹湁锛埪?.5 濂戠害 #1锛夛紱鍞竴鍙楄鍙殑鏋勯€犺矾寰勬槸 `createReceiver<R>` 宸ュ巶銆傛爤涓?瑁?`new` 鍒涘缓浼氬湪 `bindHandler` 鏃舵姏 `std::bad_weak_ptr`鈥斺€旇繖鏄?*璁捐涓婄殑寮哄埗**锛屼笉鏄剰澶栥€?2. **琛ㄥ唴寮卞紩鐢?*锛歚CtDispatchTables::HandlerEntry::receiver` 瀛?`std::weak_ptr<CtReceiver>`锛埪?.5锛夆€斺€斿垎鍙戝櫒涓庨槦鍒?*缁濅笉寤堕暱**鎺ユ敹鑰呯敓鍛藉懆鏈熴€?3. **鍙岄噸淇濋櫓锛堟棤鎮瀭璋冪敤锛?*锛?   - 蹇収灞傦細token 娉ㄩ攢锛埪?.4锛夋妸鏉＄洰浠?COW 蹇収绉婚櫎锛?   - 杩愯鏃跺眰锛氬垎鍙戞椂 `lock()` 澶辫触璺宠繃锛埪?.1 Step 6 / 搂8.2 Step 6锛夈€?   涓よ€呯嫭绔嬫垚绔嬶紝浠讳竴閮借兘闃绘瀵瑰凡浜℃帴鏀惰€呯殑璋冪敤鈥斺€?*涓嶅瓨鍦?娉ㄥ唽浜嗕絾鏋愭瀯鍚庝粛琚皟鐢?鐨勮矾寰?*銆?4. **`unbindAll()`锛圧ev 11, P2-1 鏂规 a 瀹氱锛?*锛歚~CtReceiver` 璋冪敤锛埪?.5 濂戠害 #6锛夛紝缁?dispatcher 娉ㄩ攢璇ユ帴鏀惰€呯殑鍏ㄩ儴鏉＄洰锛圕OW 鍙戝竷锛夈€?*瀹氫綅鏈哄埗**锛歳eceiver 鎸?**`std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers`**锛坄bindHandler` 鐧昏璇?dispatcher銆乼oken 娉ㄩ攢/鏋愭瀯鏃剁Щ闄わ級鈥斺€擿unbindAll()` 閬嶅巻鍒楄〃閫愪釜缁?dispatcher 鐨勬敞閿€渚嬬▼绉婚櫎鏉＄洰銆?*杩欎笉绠?鐙珛娉ㄥ唽闆嗗悎"**锛埪?.5 濂戠害 #5 绂佺殑鏄浜屽 handler 琛紝涓嶆帓鏂?dispatcher 鎸囬拡鍒楄〃锛夈€俤ispatcher **涓嶇淮鎶?鎺ユ敹鑰呪啋鏉＄洰"鍙嶅悜绱㈠紩**锛氬洖鏀朵粛鎯版€э紙鏉＄洰娈嬬暀鍒颁笅娆?COW 鍐欒矾寰勶紝鎴栨瘡娆″垎鍙戠粡 `lock()` 璺宠繃锛夈€侻4 鍙姞鍙嶅悜绱㈠紩鍋氫富鍔ㄥ洖鏀讹紙搂14 寮€鏀鹃棶棰?#6锛夈€?5. **receiver 姣?dispatcher 鐭懡锛堟甯歌矾寰勶級**锛歸eak_ptr 澶辨晥 + 鏉＄洰娈嬬暀鈥斺€斿畨鍏紝鏃犻渶浠讳綍鎵嬪姩娉ㄩ攢閬嶅巻銆俤ispatcher 姣?receiver 鐭懡瑙?搂9.2銆?
+### 9.2 CtHandlerToken 鐢熷懡鍛ㄦ湡锛坱oken 鍙暱浜?dispatcher锛?
+1. **`CtTokenState` 濂戠害锛埪?.4 / 搂7.7 濂戠害 #3锛孯ev 2 P2-10 鏇存柊锛?*锛歞ispatcher 鏋勯€犳椂鍒涘缓锛?*鏋愭瀯璺緞鎸?`m_writeMutex`**锛氣憼 鍙栭攣 鈫?鈶?瀵规瘡涓?token 鐨?`m_state`锛歚alive.store(false, seq_cst)` + 娓呯┖ `owner`锛坵eak_ptr reset锛夆啋 鈶?閲婃斁閿併€倀oken 鏋愭瀯锛堝彲鍦ㄤ换鎰忕嚎绋嬶級**涔熸寔 `m_writeMutex`** 鐨勬敞閿€渚嬬▼鍐呭仛**閿佸唴鍙屾**锛氭寔閿佷笅閲嶈 `alive`锛岃嫢浠嶄负 true 鍐?`owner.lock()`锛堝紩鐢ㄨ鏁?+1锛屼繚璇?dispatcher 鏈璋冪敤鏈熼棿涓嶆瀽鏋勶級骞舵墽琛屾敞閿€銆?*鍚屼竴鎶婇攣涓茶鍖?鏋愭瀯缈昏浆 alive"涓?娉ㄩ攢渚嬬▼"**锛屽洜姝や笉鍙兘鍑虹幇"token 璇诲埌 alive=true 鈫?dispatcher 鏋愭瀯杩涜涓?鈫?owner 鎮瀭"鈥斺€斾袱鏉¤矾寰勪簰鏂ワ紝涓?weak_ptr `lock()` 鎻愪緵绗簩娆′繚鎶わ紙搂7.7 濂戠害 #3锛夈€?2. **token 姣?dispatcher 闀垮 鈫?涓?UB**锛氳繖鏄璁℃壙璇恒€俙~CtHandlerToken` 鍙湪浠绘剰绾跨▼璋冪敤锛堟敞閿€渚嬬▼鑷韩鎸?`m_writeMutex`锛夛紱浣?*鎺ㄨ崘鍦ㄦ敞鍐岀嚎绋嬫敞閿€**锛堥伩鍏嶈法绾跨▼ COW 鍙戝竷涓?搂10.2 褰掑睘瑙勫垯绾犵紶锛屄?.7 濂戠害 #6锛夈€?3. **鍒嗗彂涓?dispatcher 琚瀽鏋?鈫?搴旂敤閿欒锛圲B 杈圭晫锛?*锛歚send/broadcast` 鎸佸揩鐓ф墽琛屾湡闂?dispatcher 鏋愭瀯锛屽湪閫斿垎鍙戜細瑙︾宸查噴鏀惧璞°€?*妗嗘灦涓嶉槻鎶?*锛氭枃妗ｈ姹?dispatcher 鐢熷懡鍛ㄦ湡闀夸簬鎵€鏈夊湪閫斿垎鍙戜笌 token銆?*M1 钀藉疄 debug 娣卞害璁℃暟鍣ㄦ姢鏍忥紙搂14 寮€鏀鹃棶棰?#3 宸茶瀹氬姞锛?*锛歚CtDispatcherBase` 鎸?`m_inDispatch`锛坉ebug 鏋勫缓涓?`size_t`锛宺elease 涓?`[[maybe_unused]]` 绌烘垚鍛橈級锛宍send/broadcast` 鍏ュ彛 `++m_inDispatch`銆佸嚭鍙?`--`锛圧AII guard 瀵硅薄锛夛紱鏋愭瀯鏂█ `m_inDispatch == 0`锛堜粎 debug锛夈€俽elease 鏋勫缓闆跺紑閿€锛堢┖鎴愬憳 + 鏃犳搷浣滐級銆?4. **move-only**锛氫竴浠芥敞鍐屽彧鏈変竴涓敞閿€鑰咃紙搂7.7 濂戠害 #2锛夛紱move 鍚庢簮 token 涓虹┖锛坄valid()==false`锛夈€?
+### 9.3 鍒嗗彂涓€鑷存€ц鍥撅紙搂8.4 鐨勪笉鍙橀噺姹囨€伙級
 
-本节把 §6.4/§7.5/§7.7/§8.4 的所有权与生命周期语义汇总为**不变量清单**——编码子agent 实现析构路径、回收逻辑与 token 对账时以此为准。所有条款均是前文契约的推论，不引入新机制。
+- COW 蹇収淇濊瘉锛?*涓€娆″垎鍙戝唴鐨勬敞鍐?娉ㄩ攢涓嶅奖鍝嶆湰娆″垎鍙戠殑琛ㄨ鍥?*鈥斺€斿凡娉ㄩ攢鏉＄洰鍦ㄦ湰蹇収鍐呬粛鍙銆佷笅娆″垎鍙戞秷澶憋紱receiver 宸蹭骸鐨勬潯鐩粡 `lock()` 璺宠繃锛埪?.4 濂戠害 #1鈥?4锛夈€傝繖鏄?搂9.1/搂9.2 鍚勬潯娆炬垚绔嬬殑鍩虹锛屽崟鐙垪涓轰笉鍙橀噺銆?
+## 10. 绾跨▼涓庡紓姝ユ姇閫掞紙Threading & Async Delivery锛?
+鏈妭瀹氫箟绾跨▼褰掑睘瑙勫垯涓庡紓姝ユ姇閫掞紙`post/postTo`銆乣CtQueue`銆乣CtEventLoop`锛夌殑瀹屾暣璇箟锛涘悓姝?`send/broadcast` 鐨勫綊灞炴柇瑷€瑙?搂8.1/搂8.2 Step 1銆?*鎵€鏈夌嚎绋嬪垽瀹氬彧缁?`CtThreadAffinity`锛埪?.14锛夆€斺€斿崟涓€浜嬪疄鏉ユ簮锛屼笉寰楀彟鍐?`std::this_thread::get_id()` 姣旇緝銆?*
 
-### 9.1 接收者生命周期（shared_ptr 持有 + weak_ptr 注册）
-
-1. **唯一持有路径**：`CtReceiver` 必须由 `std::shared_ptr` 持有（§7.5 契约 #1）；唯一受认可的构造路径是 `createReceiver<R>` 工厂。栈上/裸 `new` 创建会在 `bindHandler` 时抛 `std::bad_weak_ptr`——这是**设计上的强制**，不是意外。
-2. **表内弱引用**：`CtDispatchTables::HandlerEntry::receiver` 存 `std::weak_ptr<CtReceiver>`（§6.5）——分发器与队列**绝不延长**接收者生命周期。
-3. **双重保险（无悬垂调用）**：
-   - 快照层：token 注销（§6.4）把条目从 COW 快照移除；
-   - 运行时层：分发时 `lock()` 失败跳过（§8.1 Step 6 / §8.2 Step 6）。
-   两者独立成立，任一都能阻止对已亡接收者的调用——**不存在"注册了但析构后仍被调用"的路径**。
-4. **`unbindAll()`（Rev 11, P2-1 方案 a 定稿）**：`~CtReceiver` 调用（§7.5 契约 #6），经 dispatcher 注销该接收者的全部条目（COW 发布）。**定位机制**：receiver 持 **`std::vector<std::weak_ptr<CtDispatcherBase>> m_dispatchers`**（`bindHandler` 登记该 dispatcher、token 注销/析构时移除）——`unbindAll()` 遍历列表逐个经 dispatcher 的注销例程移除条目。**这不算"独立注册集合"**（§7.5 契约 #5 禁的是第二套 handler 表，不排斥 dispatcher 指针列表）。dispatcher **不维护"接收者→条目"反向索引**：回收仍惰性（条目残留到下次 COW 写路径，或每次分发经 `lock()` 跳过）。M4 可加反向索引做主动回收（§14 开放问题 #6）。
-5. **receiver 比 dispatcher 短命（正常路径）**：weak_ptr 失效 + 条目残留——安全，无需任何手动注销遍历。dispatcher 比 receiver 短命见 §9.2。
-
-### 9.2 CtHandlerToken 生命周期（token 可长于 dispatcher）
-
-1. **`CtTokenState` 契约（§6.4 / §7.7 契约 #3，Rev 2 P2-10 更新）**：dispatcher 构造时创建；**析构路径持 `m_writeMutex`**：① 取锁 → ② 对每个 token 的 `m_state`：`alive.store(false, seq_cst)` + 清空 `owner`（weak_ptr reset）→ ③ 释放锁。token 析构（可在任意线程）**也持 `m_writeMutex`** 的注销例程内做**锁内双检**：持锁下重读 `alive`，若仍为 true 再 `owner.lock()`（引用计数 +1，保证 dispatcher 本次调用期间不析构）并执行注销。**同一把锁串行化"析构翻转 alive"与"注销例程"**，因此不可能出现"token 读到 alive=true → dispatcher 析构进行中 → owner 悬垂"——两条路径互斥，且 weak_ptr `lock()` 提供第二次保护（§7.7 契约 #3）。
-2. **token 比 dispatcher 长寿 → 不 UB**：这是设计承诺。`~CtHandlerToken` 可在任意线程调用（注销例程自身持 `m_writeMutex`）；但**推荐在注册线程注销**（避免跨线程 COW 发布与 §10.2 归属规则纠缠，§7.7 契约 #6）。
-3. **分发中 dispatcher 被析构 → 应用错误（UB 边界）**：`send/broadcast` 持快照执行期间 dispatcher 析构，在途分发会触碰已释放对象。**框架不防护**：文档要求 dispatcher 生命周期长于所有在途分发与 token。**M1 落实 debug 深度计数器护栏（§14 开放问题 #3 已裁定加）**：`CtDispatcherBase` 持 `m_inDispatch`（debug 构建为 `size_t`，release 为 `[[maybe_unused]]` 空成员），`send/broadcast` 入口 `++m_inDispatch`、出口 `--`（RAII guard 对象）；析构断言 `m_inDispatch == 0`（仅 debug）。release 构建零开销（空成员 + 无操作）。
-4. **move-only**：一份注册只有一个注销者（§7.7 契约 #2）；move 后源 token 为空（`valid()==false`）。
-
-### 9.3 分发一致性视图（§8.4 的不变量汇总）
-
-- COW 快照保证：**一次分发内的注册/注销不影响本次分发的表视图**——已注销条目在本快照内仍可见、下次分发消失；receiver 已亡的条目经 `lock()` 跳过（§8.4 契约 #1–#4）。这是 §9.1/§9.2 各条款成立的基础，单独列为不变量。
-
-## 10. 线程与异步投递（Threading & Async Delivery）
-
-本节定义线程归属规则与异步投递（`post/postTo`、`CtQueue`、`CtEventLoop`）的完整语义；同步 `send/broadcast` 的归属断言见 §8.1/§8.2 Step 1。**所有线程判定只经 `CtThreadAffinity`（§7.14）——单一事实来源，不得另写 `std::this_thread::get_id()` 比较。**
-
-### 10.1 post / postTo 语义（M2 实现；签名已定死，§7.8）
-
-1. **`post(receiver, event)`**：把事件投递到 `receiver` 归属线程——目标 = `receiver->affinityThread()` 所在 `CtEventLoop` 的队列。**路由机制（Rev 4, P1-6）**：`CtEventLoop::current()`（§7.11 契约 #6）提供"当前线程的 loop"；跨线程查找经线程→loop 映射（`attachToCurrentThread()` 注册，M2 定具体存储：静态 `unordered_map<CtThreadId, CtEventLoop*>` + 互斥，或 TLS + 广播查找；**文档要求 post 语义可落地，编码子agent 在 M2 实现时选择并注明**）。调用线程不限（任意线程可 post）。**命名即语义**：`post` = "我要投到接收者的线程"，绝不做运行时碰运气。
-2. **`postTo(targetThread, event)`**：显式指定目标线程，不经过任何 receiver 的归属——用于"投到指定线程、由该线程的接收者处理"或临时目标。
-3. **返回值语义（Rev 4, P1-1 修正）**：`CtQueue::push` 返回 `bool`（受理 true / 溢出 false，§7.10 契约 #6）。`post` 据此：入队成功 → 返回 `kHandled`（**受理**语义，非"已处理"）；队列溢出/无目标 loop → 返回 `kUnhandled`。**post 侧不记任何 trace 相位**（post 可运行于任意线程，`CtTrace` 严格单线程，§7.9 契约 #1 / §7.8 契约 #8）——`kQueued` 由归属线程在排空时记、`kDropped` 由归属线程经 `popDropped()` 记（§7.10 契约 #6、§7.11 契约 #2）。**编码子agent 注意**：post 的返回值含义与 send 不同（send 表达处理结果，post 表达受理结果）——是否引入独立 `CtPostResult` 见 §14 开放问题 #2（当前倾向复用，避免 API churn）。
-4. **M1 占位**：`post/postTo` 返回 `kUnhandled` 且**不记任何相位**（§7.8 契约 #8；M1 无队列无 loop）；接口签名本轮定死，M2 实现完整语义。
-5. **类型还原与跨 EventSet 语义（Rev 5, P1-2 + N-6/N-7 定稿）**：
-   - **post 的入队路径**：`post(receiver, ev)` 经路由拿到目标 loop 的 **`CtQueueBase&`**（§7.11 契约 #5）。投递侧**无法获知目标队列的具体 `CtQueue<EventSet>` 类型**，因此 post **经擦除边界 `CtQueueBase::pushAny` 入队**（构造 `detail::CtAnyEventHolder<EventSet_sender>`，一次堆分配，§6.5/§7.10 契约 #7），而不是强类型 `CtQueue<EventSet_target>::push`（N-6 定稿）。
-   - **跨 EventSet 投递（N-7 定稿 + Rev 7, P2-5 强化）**：目标队列是 `CtQueue<EventSet_target>`，其 `pushAny` 对载荷做 `static_cast` 到 `CtAnyEventHolder<EventSet_target>`——**若发送方的 `EventSet_sender` ≠ 目标 `EventSet_target`，此 cast 是 UB**。契约：**`post/postTo` 要求目标 loop 的 EventSet 与发送方 EventSet 一致**；不一致时 `pushAny` 返回 false（丢弃 + 记 `kDropped`，§7.13 `kTypeNotInSet`），post 返回 `kUnhandled`。**注意（Rev 7, P2-5）**：`payloadTypeKey()` 断言**不足以**检测跨 EventSet——当两集合**共享类型 T** 时键断言通过但 cast 仍 UB。因此 `CtAnyEventHolder<EventSet>` 携带**地址派生的 `eventSetId()`**（§6.1 方案），`CtQueue<EventSet>::pushAny` 断言 `holder.eventSetId() == EventSet 自身的 set 键` **后再 cast**；`dispatchAny` 排空侧同理（键 + set 双重断言，`CtPendingEventBase::eventSetId()`，Rev 8 P2-4）。
-   - **丢弃的归因（Rev 8, P3 明确）**：跨 EventSet 拒绝（`eventSetId` 断言失败）与队列溢出（`kMaxQueued`）**都计入 `m_dropped`（`popDropped()` 报告、记 `kDropped` 相位）**——两者都是"入队被拒"；`kTypeNotInSet` 仅作 `CtEventError` 的错误类别（若调用侧查询错误对象），不单独计数。**编码子agent 不得为跨 EventSet 拒绝单开计数通道**。
-   - 排空时 `front()` 给出 `CtPendingEventBase*`，`dispatchAny` 经 `payloadTypeKey()` 断言后还原具体 variant 再进分发管线（§8.1 全管线复用，无再 cast）。
-
-### 10.2 归属规则（Affinity Rules）
-
-| 对象 | 归属基准 | 判定用途 |
+### 10.1 post / postTo 璇箟锛圡2 瀹炵幇锛涚鍚嶅凡瀹氭锛屄?.8锛?
+1. **`post(receiver, event)`**锛氭妸浜嬩欢鎶曢€掑埌 `receiver` 褰掑睘绾跨▼鈥斺€旂洰鏍?= `receiver->affinityThread()` 鎵€鍦?`CtEventLoop` 鐨勯槦鍒椼€?*璺敱鏈哄埗锛圧ev 4, P1-6锛?*锛歚CtEventLoop::current()`锛埪?.11 濂戠害 #6锛夋彁渚?褰撳墠绾跨▼鐨?loop"锛涜法绾跨▼鏌ユ壘缁忕嚎绋嬧啋loop 鏄犲皠锛坄attachToCurrentThread()` 娉ㄥ唽锛孧2 瀹氬叿浣撳瓨鍌細闈欐€?`unordered_map<CtThreadId, CtEventLoop*>` + 浜掓枼锛屾垨 TLS + 骞挎挱鏌ユ壘锛?*鏂囨。瑕佹眰 post 璇箟鍙惤鍦帮紝缂栫爜瀛恆gent 鍦?M2 瀹炵幇鏃堕€夋嫨骞舵敞鏄?*锛夈€傝皟鐢ㄧ嚎绋嬩笉闄愶紙浠绘剰绾跨▼鍙?post锛夈€?*鍛藉悕鍗宠涔?*锛歚post` = "鎴戣鎶曞埌鎺ユ敹鑰呯殑绾跨▼"锛岀粷涓嶅仛杩愯鏃剁杩愭皵銆?2. **`postTo(targetThread, event)`**锛氭樉寮忔寚瀹氱洰鏍囩嚎绋嬶紝涓嶇粡杩囦换浣?receiver 鐨勫綊灞炩€斺€旂敤浜?鎶曞埌鎸囧畾绾跨▼銆佺敱璇ョ嚎绋嬬殑鎺ユ敹鑰呭鐞?鎴栦复鏃剁洰鏍囥€?3. **杩斿洖鍊艰涔夛紙Rev 4, P1-1 淇锛?*锛歚CtQueue::push` 杩斿洖 `bool`锛堝彈鐞?true / 婧㈠嚭 false锛屄?.10 濂戠害 #6锛夈€俙post` 鎹锛氬叆闃熸垚鍔?鈫?杩斿洖 `kHandled`锛?*鍙楃悊**璇箟锛岄潪"宸插鐞?锛夛紱闃熷垪婧㈠嚭/鏃犵洰鏍?loop 鈫?杩斿洖 `kUnhandled`銆?*post 渚т笉璁颁换浣?trace 鐩镐綅**锛坧ost 鍙繍琛屼簬浠绘剰绾跨▼锛宍CtTrace` 涓ユ牸鍗曠嚎绋嬶紝搂7.9 濂戠害 #1 / 搂7.8 濂戠害 #8锛夆€斺€擿kQueued` 鐢卞綊灞炵嚎绋嬪湪鎺掔┖鏃惰銆乣kDropped` 鐢卞綊灞炵嚎绋嬬粡 `popDropped()` 璁帮紙搂7.10 濂戠害 #6銆伮?.11 濂戠害 #2锛夈€?*缂栫爜瀛恆gent 娉ㄦ剰**锛歱ost 鐨勮繑鍥炲€煎惈涔変笌 send 涓嶅悓锛坰end 琛ㄨ揪澶勭悊缁撴灉锛宲ost 琛ㄨ揪鍙楃悊缁撴灉锛夆€斺€旀槸鍚﹀紩鍏ョ嫭绔?`CtPostResult` 瑙?搂14 寮€鏀鹃棶棰?#2锛堝綋鍓嶅€惧悜澶嶇敤锛岄伩鍏?API churn锛夈€?4. **M1 鍗犱綅**锛歚post/postTo` 杩斿洖 `kUnhandled` 涓?*涓嶈浠讳綍鐩镐綅**锛埪?.8 濂戠害 #8锛汳1 鏃犻槦鍒楁棤 loop锛夛紱鎺ュ彛绛惧悕鏈疆瀹氭锛孧2 瀹炵幇瀹屾暣璇箟銆?5. **绫诲瀷杩樺師涓庤法 EventSet 璇箟锛圧ev 5, P1-2 + N-6/N-7 瀹氱锛?*锛?   - **post 鐨勫叆闃熻矾寰?*锛歚post(receiver, ev)` 缁忚矾鐢辨嬁鍒扮洰鏍?loop 鐨?**`CtQueueBase&`**锛埪?.11 濂戠害 #5锛夈€傛姇閫掍晶**鏃犳硶鑾风煡鐩爣闃熷垪鐨勫叿浣?`CtQueue<EventSet>` 绫诲瀷**锛屽洜姝?post **缁忔摝闄よ竟鐣?`CtQueueBase::pushAny` 鍏ラ槦**锛堟瀯閫?`detail::CtAnyEventHolder<EventSet_sender>`锛屼竴娆″爢鍒嗛厤锛屄?.5/搂7.10 濂戠害 #7锛夛紝鑰屼笉鏄己绫诲瀷 `CtQueue<EventSet_target>::push`锛圢-6 瀹氱锛夈€?   - **璺?EventSet 鎶曢€掞紙N-7 瀹氱 + Rev 7, P2-5 寮哄寲锛?*锛氱洰鏍囬槦鍒楁槸 `CtQueue<EventSet_target>`锛屽叾 `pushAny` 瀵硅浇鑽峰仛 `static_cast` 鍒?`CtAnyEventHolder<EventSet_target>`鈥斺€?*鑻ュ彂閫佹柟鐨?`EventSet_sender` 鈮?鐩爣 `EventSet_target`锛屾 cast 鏄?UB**銆傚绾︼細**`post/postTo` 瑕佹眰鐩爣 loop 鐨?EventSet 涓庡彂閫佹柟 EventSet 涓€鑷?*锛涗笉涓€鑷存椂 `pushAny` 杩斿洖 false锛堜涪寮?+ 璁?`kDropped`锛屄?.13 `kTypeNotInSet`锛夛紝post 杩斿洖 `kUnhandled`銆?*娉ㄦ剰锛圧ev 7, P2-5锛?*锛歚payloadTypeKey()` 鏂█**涓嶈冻浠?*妫€娴嬭法 EventSet鈥斺€斿綋涓ら泦鍚?*鍏变韩绫诲瀷 T** 鏃堕敭鏂█閫氳繃浣?cast 浠?UB銆傚洜姝?`CtAnyEventHolder<EventSet>` 鎼哄甫**鍦板潃娲剧敓鐨?`eventSetId()`**锛埪?.1 鏂规锛夛紝`CtQueue<EventSet>::pushAny` 鏂█ `holder.eventSetId() == EventSet 鑷韩鐨?set 閿甡 **鍚庡啀 cast**锛沗dispatchAny` 鎺掔┖渚у悓鐞嗭紙閿?+ set 鍙岄噸鏂█锛宍CtPendingEventBase::eventSetId()`锛孯ev 8 P2-4锛夈€?   - **涓㈠純鐨勫綊鍥狅紙Rev 8, P3 鏄庣‘锛?*锛氳法 EventSet 鎷掔粷锛坄eventSetId` 鏂█澶辫触锛変笌闃熷垪婧㈠嚭锛坄kMaxQueued`锛?*閮借鍏?`m_dropped`锛坄popDropped()` 鎶ュ憡銆佽 `kDropped` 鐩镐綅锛?*鈥斺€斾袱鑰呴兘鏄?鍏ラ槦琚嫆"锛沗kTypeNotInSet` 浠呬綔 `CtEventError` 鐨勯敊璇被鍒紙鑻ヨ皟鐢ㄤ晶鏌ヨ閿欒瀵硅薄锛夛紝涓嶅崟鐙鏁般€?*缂栫爜瀛恆gent 涓嶅緱涓鸿法 EventSet 鎷掔粷鍗曞紑璁℃暟閫氶亾**銆?   - 鎺掔┖鏃?`front()` 缁欏嚭 `CtPendingEventBase*`锛宍dispatchAny` 缁?`payloadTypeKey()` 鏂█鍚庤繕鍘熷叿浣?variant 鍐嶈繘鍒嗗彂绠＄嚎锛埪?.1 鍏ㄧ绾垮鐢紝鏃犲啀 cast锛夈€?
+### 10.2 褰掑睘瑙勫垯锛圓ffinity Rules锛?
+| 瀵硅薄 | 褰掑睘鍩哄噯 | 鍒ゅ畾鐢ㄩ€?|
 |------|----------|----------|
-| `CtReceiver` | 创建线程（构造时记录，§7.5/§7.14） | `send` 的断言基准之一；`post` 的目标线程 |
-| `CtDispatcher` | 创建线程（`CtDispatcherBase` 内嵌 affinity） | `send`（双断言之一，Rev 11 P1-1）与 `broadcast` 的断言基准 |
-| `CtQueue` | 创建线程（= 所属 loop 线程，§7.10） | `front/popFront` 仅限归属线程；`push/pushAny` 任意线程 |
-| `CtEventLoop` | 创建线程（§7.11） | `exec()` 仅限归属线程 |
+| `CtReceiver` | 鍒涘缓绾跨▼锛堟瀯閫犳椂璁板綍锛屄?.5/搂7.14锛?| `send` 鐨勬柇瑷€鍩哄噯涔嬩竴锛沗post` 鐨勭洰鏍囩嚎绋?|
+| `CtDispatcher` | 鍒涘缓绾跨▼锛坄CtDispatcherBase` 鍐呭祵 affinity锛?| `send`锛堝弻鏂█涔嬩竴锛孯ev 11 P1-1锛変笌 `broadcast` 鐨勬柇瑷€鍩哄噯 |
+| `CtQueue` | 鍒涘缓绾跨▼锛? 鎵€灞?loop 绾跨▼锛屄?.10锛?| `front/popFront` 浠呴檺褰掑睘绾跨▼锛沗push/pushAny` 浠绘剰绾跨▼ |
+| `CtEventLoop` | 鍒涘缓绾跨▼锛埪?.11锛?| `exec()` 浠呴檺褰掑睘绾跨▼ |
 
-1. **`send` 基准 = receiver 归属 **∧** dispatcher 归属（双断言，Rev 11, P1-1）；`broadcast` 基准 = dispatcher 归属**（§8.1/§8.2 Step 1）。**双断言隐含 "receiver 必须创建于 dispatcher 归属线程"**——dispatcher 的 `m_trace` 是严格单线程对象（§7.9 契约 #1），send 管线写它；若不断言 dispatcher 归属，跨线程 send 会 data race。编码子agent 不得只断 receiver。
-2. **`post` 目标 = receiver 归属线程**：发送线程 ≠ 接收者线程是合法且唯一合法的异步用法；`postTo` 允许绕过 receiver 归属（显式目标）。
-3. **线程迁移（edge case）**：`CtThreadAffinity::rebindToCurrentThread()`（§7.14 契约 #5）仅在 dispatcher 确认无该接收者待投递/待注册项时允许；M1 不实现（§14 开放问题 #4）。
-4. **队列与 loop 绑定（Rev 7, P2-6 修正）**：**`CtEventLoop` 在 `setDispatcher<EventSet>` 内创建自己的 `CtQueue<EventSet>`**（§7.11 契约 #3）——构造函数运行时 `EventSet` 未知，无法实例化 `CtQueue<EventSet>`；`setDispatcher` 是模板实例化点。**归属 = 调用 `setDispatcher` 的线程（必须为 loop 线程，M2 断言）**；`setDispatcher` 之后 `queue()` 才可用。**分发永远发生在队列归属线程**——异步路径的归属自洽闭环（§7.11 契约 #2）。
+1. **`send` 鍩哄噯 = receiver 褰掑睘 **鈭?* dispatcher 褰掑睘锛堝弻鏂█锛孯ev 11, P1-1锛夛紱`broadcast` 鍩哄噯 = dispatcher 褰掑睘**锛埪?.1/搂8.2 Step 1锛夈€?*鍙屾柇瑷€闅愬惈 "receiver 蹇呴』鍒涘缓浜?dispatcher 褰掑睘绾跨▼"**鈥斺€攄ispatcher 鐨?`m_trace` 鏄弗鏍煎崟绾跨▼瀵硅薄锛埪?.9 濂戠害 #1锛夛紝send 绠＄嚎鍐欏畠锛涜嫢涓嶆柇瑷€ dispatcher 褰掑睘锛岃法绾跨▼ send 浼?data race銆傜紪鐮佸瓙agent 涓嶅緱鍙柇 receiver銆?2. **`post` 鐩爣 = receiver 褰掑睘绾跨▼**锛氬彂閫佺嚎绋?鈮?鎺ユ敹鑰呯嚎绋嬫槸鍚堟硶涓斿敮涓€鍚堟硶鐨勫紓姝ョ敤娉曪紱`postTo` 鍏佽缁曡繃 receiver 褰掑睘锛堟樉寮忕洰鏍囷級銆?3. **绾跨▼杩佺Щ锛坋dge case锛?*锛歚CtThreadAffinity::rebindToCurrentThread()`锛埪?.14 濂戠害 #5锛変粎鍦?dispatcher 纭鏃犺鎺ユ敹鑰呭緟鎶曢€?寰呮敞鍐岄」鏃跺厑璁革紱M1 涓嶅疄鐜帮紙搂14 寮€鏀鹃棶棰?#4锛夈€?4. **闃熷垪涓?loop 缁戝畾锛圧ev 7, P2-6 淇锛?*锛?*`CtEventLoop` 鍦?`setDispatcher<EventSet>` 鍐呭垱寤鸿嚜宸辩殑 `CtQueue<EventSet>`**锛埪?.11 濂戠害 #3锛夆€斺€旀瀯閫犲嚱鏁拌繍琛屾椂 `EventSet` 鏈煡锛屾棤娉曞疄渚嬪寲 `CtQueue<EventSet>`锛沗setDispatcher` 鏄ā鏉垮疄渚嬪寲鐐广€?*褰掑睘 = 璋冪敤 `setDispatcher` 鐨勭嚎绋嬶紙蹇呴』涓?loop 绾跨▼锛孧2 鏂█锛?*锛沗setDispatcher` 涔嬪悗 `queue()` 鎵嶅彲鐢ㄣ€?*鍒嗗彂姘歌繙鍙戠敓鍦ㄩ槦鍒楀綊灞炵嚎绋?*鈥斺€斿紓姝ヨ矾寰勭殑褰掑睘鑷唇闂幆锛埪?.11 濂戠害 #2锛夈€?
+### 10.3 闃熷垪鎺掑簭瑙勫垯
 
-### 10.3 队列排序规则
-
-1. **事件序（队列内，§7.10 契约 #4）**：`CtEvent::priority()`（§7.3）非零值作为插序提示，**数值大的先出队**；`0`（默认）表示"无提示"，按 FIFO 插入顺序。
-2. **注册序（表内，§7.15）**：filters 按 `(CtHandlerPriority 降序, id 升序)`；handlers 按 `id` 升序（M1 语义不变）。
-3. **实现方式（Rev 12, P3 溢出策略裁定）**：`CtQueue::push` 持锁后按 priority 二分插入（`std::deque`），同级追加到尾部（稳定 FIFO）；`front` 恒取队头。**溢出**：`kMaxQueued = 8192` 时**丢弃队尾**（最低优先级、同级中最旧；记 `kDropped`，§7.10 契约 #5——"最旧"在优先级有序 deque 中无精确落点，统一裁定为队尾，无需时间戳）。
-4. **确定性**：同 priority 事件按插入序出队——"同批次事件顺序可复现"（测试依赖，§13.3 用例 #1）。
-
-### 10.4 与 03-rewrite-proposal 的偏差（显式声明）
-
-| # | 03 方案 | 本文档裁决 | 理由 |
+1. **浜嬩欢搴忥紙闃熷垪鍐咃紝搂7.10 濂戠害 #4锛?*锛歚CtEvent::priority()`锛埪?.3锛夐潪闆跺€间綔涓烘彃搴忔彁绀猴紝**鏁板€煎ぇ鐨勫厛鍑洪槦**锛沗0`锛堥粯璁わ級琛ㄧず"鏃犳彁绀?锛屾寜 FIFO 鎻掑叆椤哄簭銆?2. **娉ㄥ唽搴忥紙琛ㄥ唴锛屄?.15锛?*锛歠ilters 鎸?`(CtHandlerPriority 闄嶅簭, id 鍗囧簭)`锛沨andlers 鎸?`id` 鍗囧簭锛圡1 璇箟涓嶅彉锛夈€?3. **瀹炵幇鏂瑰紡锛圧ev 12, P3 婧㈠嚭绛栫暐瑁佸畾 + 瀹¤ WARN 鎺緸淇锛?*锛歚CtQueue::push` 鎸侀攣鍚庢寜 priority 浜屽垎鎻掑叆锛坄std::deque`锛夛紝鍚岀骇杩藉姞鍒板熬閮紙绋冲畾 FIFO锛夛紱`front` 鎭掑彇闃熷ご銆?*婧㈠嚭**锛歚kMaxQueued = 8192` 鏃?*涓㈠純闃熷熬**锛堟渶浣庝紭鍏堢骇銆佸悓绾т腑 **seq 鏈€澶?鏈€鏂?*鈥斺€?鏈€鏃?鍦ㄤ紭鍏堢骇鏈夊簭 deque 涓棤绮剧‘钀界偣锛孯ev 13 缁熶竴瑁佸畾涓洪槦灏撅紱鍚岀骇 tail = 鏈€鏂板叆闃熻€咃紝鏃犻渶鏃堕棿鎴筹紱璁?`kDropped`锛屄?.10 濂戠害 #5锛夈€?4. **纭畾鎬?*锛氬悓 priority 浜嬩欢鎸夋彃鍏ュ簭鍑洪槦鈥斺€?鍚屾壒娆′簨浠堕『搴忓彲澶嶇幇"锛堟祴璇曚緷璧栵紝搂13.3 鐢ㄤ緥 #1锛夈€?
+### 10.4 涓?03-rewrite-proposal 鐨勫亸宸紙鏄惧紡澹版槑锛?
+| # | 03 鏂规 | 鏈枃妗ｈ鍐?| 鐞嗙敱 |
 |---|---------|-----------|------|
-| 1 | 03 §3.5 的抽象 `EventSource` 概念 | 采纳为 `CtEventSource`（§7.12），v0 枚举改名 `CtEventOrigin` | 命名冲突解决（§5.4） |
-| 2 | 03 若要求分发器非模板 | 否决——`CtDispatcher<CtEventSet<Ts...>>` 模板化（§7.8） | 编译期类型域闭合是"杜绝再 cast"的前提（§6.3） |
-| 3 | 03 若只提单一异步 `post` | 拆分为 `post/postTo`（§7.8） | 归属显式化（继承约束 #4） |
-| 4 | 03 若允许源直接送分发器 | 否决——源只注入 `CtQueue`，经 `CtEventLoop` 排空 | 分层规则 #3/#4（§4.1） |
-| 5 | 03 §3.3 延迟删除 `defer_delete(obj)`：由 dispatcher 统一处理 | **推迟到 M3/M4**（Qt 桥阶段或更晚）。M1/M2 **不实现**：`CtReceiver` 的销毁由应用 `shared_ptr` 控制（§9.1），事件系统不持有接收者所有权，`defer_delete` 需要"系统持有待删对象 + 循环对齐点"，与"shared_ptr 唯一持有路径"（§7.5 契约 #1）冲突。落地形态（若做）：dispatcher 侧一个 `defer_delete(std::shared_ptr<CtReceiver>)` 辅助，在事件循环安全点批量释放——接口**不在本轮定死**，避免为未定需求锁 ABI。 | 所有权模型（shared_ptr 持有，§9.1）已解决 Qt 的 `deleteLater` 痛点；`defer_delete` 只是便利层，非必需 |
-| 6 | 03 §3.3 事件压缩 `EventTraits<T>::compressible` 编译期开关 | **否决（不采纳）**：事件系统不做事件**内容**压缩/合并。Qt 的压缩动机（`QEvent::spontaneous` 合并、timer 去重）在 CRISP 中由**队列层面的策略**覆盖——`CtQueue::push` 的 `priority` 排序（§10.3）与 `kDropped` 溢出语义（§7.10）可表达去重/丢弃意图；载荷本身不可变（§7.3 契约 #3），压缩语义与"载荷不可变"矛盾。若未来需要 timer 合并，在 `CtTimerEventSource`（§7.12）内部实现合并逻辑，**不进入 `CtEventTraits`**。 | 载荷不可变 + 零分配（§11）优先；`CtEventTraits` 只承载 `kIsValid/name`（§7.2），不膨胀 |
-| 7 | 03 §3.6 大负载用 `unique_ptr` 明确转移所有权 | **细化采纳（部分）**：事件**载荷容器**是值语义 `CtEvent<T>`（§7.3），其中 `T` 可以是 `std::unique_ptr<Big>`——此时"转移所有权"由 **`T` 的 move 语义**表达，`CtEvent<T>` 本身不需要 unique_ptr 包装；跨线程队列存储是 `std::variant<CtEvent<Ts>...>`（§7.4），`CtEvent<T>` 内部 `T` 可含 unique_ptr，`deque` 移动无拷贝。**编码子agent 注意**：队列内 `CtAnyEvent` 的移动/析构必须尊重 `T` 的 move-only 性——`std::variant` 原生支持；**不要在 `CtEvent<T>` 上再加一层 unique_ptr**（双所有权语义混乱）。 | 值语义事件 + `T` 自身 move 语义即可表达（03 §6"内存：`std::unique_ptr`/值语义"的落地）；M4 若需 <64B 小对象 SBO 优化，另见 §11.3 |
-| 8 | 03 §3.4 `post(Receiver&, Event<T>, Priority = Normal)` 带优先级参数 | **采纳（参数位置调整）**：优先级**不作为 post 的参数**，而是**事件属性** `CtEvent<T>::priority()`（§7.3，公开 `setPriority(uint64_t)` 在投递前设置、默认 0 = 无提示，Rev 7, P2-1）——队列按 `priority()` 排序（§10.3 规则 #1）。03 的 `Priority = Normal` 默认参在 CRISP 中失去意义（`0` 即"无提示"），显式事件属性让**同一事件不同投递**（send/post）优先级一致、且注册侧不引入多余参数。`post` 签名保持 §7.8 定死的形态。 | 优先级属于事件而非投递调用；避免 post 参数膨胀；与 §7.15 注册优先级正交 |
+| 1 | 03 搂3.5 鐨勬娊璞?`EventSource` 姒傚康 | 閲囩撼涓?`CtEventSource`锛埪?.12锛夛紝v0 鏋氫妇鏀瑰悕 `CtEventOrigin` | 鍛藉悕鍐茬獊瑙ｅ喅锛埪?.4锛?|
+| 2 | 03 鑻ヨ姹傚垎鍙戝櫒闈炴ā鏉?| 鍚﹀喅鈥斺€擿CtDispatcher<CtEventSet<Ts...>>` 妯℃澘鍖栵紙搂7.8锛?| 缂栬瘧鏈熺被鍨嬪煙闂悎鏄?鏉滅粷鍐?cast"鐨勫墠鎻愶紙搂6.3锛?|
+| 3 | 03 鑻ュ彧鎻愬崟涓€寮傛 `post` | 鎷嗗垎涓?`post/postTo`锛埪?.8锛?| 褰掑睘鏄惧紡鍖栵紙缁ф壙绾︽潫 #4锛?|
+| 4 | 03 鑻ュ厑璁告簮鐩存帴閫佸垎鍙戝櫒 | 鍚﹀喅鈥斺€旀簮鍙敞鍏?`CtQueue`锛岀粡 `CtEventLoop` 鎺掔┖ | 鍒嗗眰瑙勫垯 #3/#4锛埪?.1锛?|
+| 5 | 03 搂3.3 寤惰繜鍒犻櫎 `defer_delete(obj)`锛氱敱 dispatcher 缁熶竴澶勭悊 | **鎺ㄨ繜鍒?M3/M4**锛圦t 妗ラ樁娈垫垨鏇存櫄锛夈€侻1/M2 **涓嶅疄鐜?*锛歚CtReceiver` 鐨勯攢姣佺敱搴旂敤 `shared_ptr` 鎺у埗锛埪?.1锛夛紝浜嬩欢绯荤粺涓嶆寔鏈夋帴鏀惰€呮墍鏈夋潈锛宍defer_delete` 闇€瑕?绯荤粺鎸佹湁寰呭垹瀵硅薄 + 寰幆瀵归綈鐐?锛屼笌"shared_ptr 鍞竴鎸佹湁璺緞"锛埪?.5 濂戠害 #1锛夊啿绐併€傝惤鍦板舰鎬侊紙鑻ュ仛锛夛細dispatcher 渚т竴涓?`defer_delete(std::shared_ptr<CtReceiver>)` 杈呭姪锛屽湪浜嬩欢寰幆瀹夊叏鐐规壒閲忛噴鏀锯€斺€旀帴鍙?*涓嶅湪鏈疆瀹氭**锛岄伩鍏嶄负鏈畾闇€姹傞攣 ABI銆?| 鎵€鏈夋潈妯″瀷锛坰hared_ptr 鎸佹湁锛屄?.1锛夊凡瑙ｅ喅 Qt 鐨?`deleteLater` 鐥涚偣锛沗defer_delete` 鍙槸渚垮埄灞傦紝闈炲繀闇€ |
+| 6 | 03 搂3.3 浜嬩欢鍘嬬缉 `EventTraits<T>::compressible` 缂栬瘧鏈熷紑鍏?| **鍚﹀喅锛堜笉閲囩撼锛?*锛氫簨浠剁郴缁熶笉鍋氫簨浠?*鍐呭**鍘嬬缉/鍚堝苟銆俀t 鐨勫帇缂╁姩鏈猴紙`QEvent::spontaneous` 鍚堝苟銆乼imer 鍘婚噸锛夊湪 CRISP 涓敱**闃熷垪灞傞潰鐨勭瓥鐣?*瑕嗙洊鈥斺€擿CtQueue::push` 鐨?`priority` 鎺掑簭锛埪?0.3锛変笌 `kDropped` 婧㈠嚭璇箟锛埪?.10锛夊彲琛ㄨ揪鍘婚噸/涓㈠純鎰忓浘锛涜浇鑽锋湰韬笉鍙彉锛埪?.3 濂戠害 #3锛夛紝鍘嬬缉璇箟涓?杞借嵎涓嶅彲鍙?鐭涚浘銆傝嫢鏈潵闇€瑕?timer 鍚堝苟锛屽湪 `CtTimerEventSource`锛埪?.12锛夊唴閮ㄥ疄鐜板悎骞堕€昏緫锛?*涓嶈繘鍏?`CtEventTraits`**銆?| 杞借嵎涓嶅彲鍙?+ 闆跺垎閰嶏紙搂11锛変紭鍏堬紱`CtEventTraits` 鍙壙杞?`kIsValid/name`锛埪?.2锛夛紝涓嶈啫鑳€ |
+| 7 | 03 搂3.6 澶ц礋杞界敤 `unique_ptr` 鏄庣‘杞Щ鎵€鏈夋潈 | **缁嗗寲閲囩撼锛堥儴鍒嗭級**锛氫簨浠?*杞借嵎瀹瑰櫒**鏄€艰涔?`CtEvent<T>`锛埪?.3锛夛紝鍏朵腑 `T` 鍙互鏄?`std::unique_ptr<Big>`鈥斺€旀鏃?杞Щ鎵€鏈夋潈"鐢?**`T` 鐨?move 璇箟**琛ㄨ揪锛宍CtEvent<T>` 鏈韩涓嶉渶瑕?unique_ptr 鍖呰锛涜法绾跨▼闃熷垪瀛樺偍鏄?`std::variant<CtEvent<Ts>...>`锛埪?.4锛夛紝`CtEvent<T>` 鍐呴儴 `T` 鍙惈 unique_ptr锛宍deque` 绉诲姩鏃犳嫹璐濄€?*缂栫爜瀛恆gent 娉ㄦ剰**锛氶槦鍒楀唴 `CtAnyEvent` 鐨勭Щ鍔?鏋愭瀯蹇呴』灏婇噸 `T` 鐨?move-only 鎬р€斺€擿std::variant` 鍘熺敓鏀寔锛?*涓嶈鍦?`CtEvent<T>` 涓婂啀鍔犱竴灞?unique_ptr**锛堝弻鎵€鏈夋潈璇箟娣蜂贡锛夈€?| 鍊艰涔変簨浠?+ `T` 鑷韩 move 璇箟鍗冲彲琛ㄨ揪锛?3 搂6"鍐呭瓨锛歚std::unique_ptr`/鍊艰涔?鐨勮惤鍦帮級锛汳4 鑻ラ渶 <64B 灏忓璞?SBO 浼樺寲锛屽彟瑙?搂11.3 |
+| 8 | 03 搂3.4 `post(Receiver&, Event<T>, Priority = Normal)` 甯︿紭鍏堢骇鍙傛暟 | **閲囩撼锛堝弬鏁颁綅缃皟鏁达級**锛氫紭鍏堢骇**涓嶄綔涓?post 鐨勫弬鏁?*锛岃€屾槸**浜嬩欢灞炴€?* `CtEvent<T>::priority()`锛埪?.3锛屽叕寮€ `setPriority(uint64_t)` 鍦ㄦ姇閫掑墠璁剧疆銆侀粯璁?0 = 鏃犳彁绀猴紝Rev 7, P2-1锛夆€斺€旈槦鍒楁寜 `priority()` 鎺掑簭锛埪?0.3 瑙勫垯 #1锛夈€?3 鐨?`Priority = Normal` 榛樿鍙傚湪 CRISP 涓け鍘绘剰涔夛紙`0` 鍗?鏃犳彁绀?锛夛紝鏄惧紡浜嬩欢灞炴€ц**鍚屼竴浜嬩欢涓嶅悓鎶曢€?*锛坰end/post锛変紭鍏堢骇涓€鑷淬€佷笖娉ㄥ唽渚т笉寮曞叆澶氫綑鍙傛暟銆俙post` 绛惧悕淇濇寔 搂7.8 瀹氭鐨勫舰鎬併€?| 浼樺厛绾у睘浜庝簨浠惰€岄潪鎶曢€掕皟鐢紱閬垮厤 post 鍙傛暟鑶ㄨ儉锛涗笌 搂7.15 娉ㄥ唽浼樺厛绾ф浜?|
 
 ---
 
-## 11. 性能与资源管理（Performance & Resource Management）
+## 11. 鎬ц兘涓庤祫婧愮鐞嗭紙Performance & Resource Management锛?
+鏈妭鏄?鐑矾寰勯浂鍫嗗垎閰?锛堣璁″師鍒?#5锛夌殑**閲忓寲钀藉湴**涓庤祫婧愰绠椼€傛墍鏈夋潯娆炬湇鍔′簬 搂4.2 閫€鍑烘爣鍑嗭紙"鍒嗛厤璁℃暟鍣ㄦ樉绀哄垎鍙戦浂鍒嗛厤"锛夈€?
+### 11.1 鐑矾寰勫垎閰嶅璁★紙姣忓垎鍙戝竷涓氾級
 
-本节是"热路径零堆分配"（设计原则 #5）的**量化落地**与资源预算。所有条款服务于 §4.2 退出标准（"分配计数器显示分发零分配"）。
-
-### 11.1 热路径分配审计（每分发布业）
-
-| 步骤（§8.1） | 分配？ | 说明 |
+| 姝ラ锛埪?.1锛?| 鍒嗛厤锛?| 璇存槑 |
 |--------------|--------|------|
-| 线程断言 | 否 | `CtThreadId` 整数比较（§7.14） |
-| COW 快照 | 否 | `shared_ptr` 拷贝 = 指针 + 原子引用计数（§6.5） |
-| 序列号 | 否 | 单调计数（§8.2） |
-| trace `kDispatched` | 否 | 无锁环，槽位预分配（§7.9） |
-| observers/filters/handlers 回调 | 否 | 表内 `std::function` 已构造（注册边界），调用零分配 |
-| `CtDispatchContext` | 否 | 栈上构造，值语义（§7.6） |
-| 结果返回 | 否 | 枚举值 |
+| 绾跨▼鏂█ | 鍚?| `CtThreadId` 鏁存暟姣旇緝锛埪?.14锛?|
+| COW 蹇収 | 鍚?| `shared_ptr` 鎷疯礉 = 鎸囬拡 + 鍘熷瓙寮曠敤璁℃暟锛埪?.5锛?|
+| 搴忓垪鍙?| 鍚?| 鍗曡皟璁℃暟锛埪?.2锛?|
+| trace `kDispatched` | 鍚?| 鏃犻攣鐜紝妲戒綅棰勫垎閰嶏紙搂7.9锛?|
+| observers/filters/handlers 鍥炶皟 | 鍚?| 琛ㄥ唴 `std::function` 宸叉瀯閫狅紙娉ㄥ唽杈圭晫锛夛紝璋冪敤闆跺垎閰?|
+| `CtDispatchContext` | 鍚?| 鏍堜笂鏋勯€狅紝鍊艰涔夛紙搂7.6锛?|
+| 缁撴灉杩斿洖 | 鍚?| 鏋氫妇鍊?|
 
-**不变量（Rev 2, P2-7 修正）**：`send/broadcast` 全程（框架侧）**零堆分配**；锁方面——COW 快照入口的 `std::atomic_load(shared_ptr)` 在 C++17 标准库内部各有一把锁（libstdc++/MSVC 实现细节），因此是"**一次标准库内部锁（低竞争，仅与写路径短暂竞争）+ 无写路径互斥**"，**不是字面零锁**；热路径其余部分（表查找、trace、管线、上下文构造）零锁零分配。注册/注销是唯一分配点（`std::function`、COW 拷贝）——**写路径允许分配**（§6.5）。**M4 换 C++20 `std::atomic<shared_ptr>`（无锁）或自研原子指针后，读入口才达到真零锁**（§6.5 声明）。§13.1 用例 #12 的分配断言不受影响。
-
-### 11.2 锁预算（Rev 2, P2-7 修正）
-
-| 对象 | 锁 | 路径 |
+**涓嶅彉閲忥紙Rev 2, P2-7 淇锛?*锛歚send/broadcast` 鍏ㄧ▼锛堟鏋朵晶锛?*闆跺爢鍒嗛厤**锛涢攣鏂归潰鈥斺€擟OW 蹇収鍏ュ彛鐨?`std::atomic_load(shared_ptr)` 鍦?C++17 鏍囧噯搴撳唴閮ㄥ悇鏈変竴鎶婇攣锛坙ibstdc++/MSVC 瀹炵幇缁嗚妭锛夛紝鍥犳鏄?**涓€娆℃爣鍑嗗簱鍐呴儴閿侊紙浣庣珵浜夛紝浠呬笌鍐欒矾寰勭煭鏆傜珵浜夛級+ 鏃犲啓璺緞浜掓枼**"锛?*涓嶆槸瀛楅潰闆堕攣**锛涚儹璺緞鍏朵綑閮ㄥ垎锛堣〃鏌ユ壘銆乼race銆佺绾裤€佷笂涓嬫枃鏋勯€狅級闆堕攣闆跺垎閰嶃€傛敞鍐?娉ㄩ攢鏄敮涓€鍒嗛厤鐐癸紙`std::function`銆丆OW 鎷疯礉锛夆€斺€?*鍐欒矾寰勫厑璁稿垎閰?*锛埪?.5锛夈€?*M4 鎹?C++20 `std::atomic<shared_ptr>`锛堟棤閿侊級鎴栬嚜鐮斿師瀛愭寚閽堝悗锛岃鍏ュ彛鎵嶈揪鍒扮湡闆堕攣**锛埪?.5 澹版槑锛夈€偮?3.1 鐢ㄤ緥 #12 鐨勫垎閰嶆柇瑷€涓嶅彈褰卞搷銆?
+### 11.2 閿侀绠楋紙Rev 2, P2-7 淇锛?
+| 瀵硅薄 | 閿?| 璺緞 |
 |------|-----|------|
-| COW 分发表 | `m_writeMutex` | 仅注册/注销（写路径，§6.5）；**读入口另有 `std::atomic_load(shared_ptr)` 标准库内部锁（C++17 实现细节，低竞争）——已如实声明（§11.1），M4 消除** |
-| `CtTrace` | 无锁（严格单线程，§7.9 契约 #1，Rev 2 P1-4） | 热路径 |
-| `CtQueue` | `m_mutex` | 仅 `push`（跨线程入队）；`front/popFront` 归属线程独占（§7.10 契约 #4） |
-| `CtThreadAffinity` | 无锁（整数比较） | 热路径 |
+| COW 鍒嗗彂琛?| `m_writeMutex` | 浠呮敞鍐?娉ㄩ攢锛堝啓璺緞锛屄?.5锛夛紱**璇诲叆鍙ｅ彟鏈?`std::atomic_load(shared_ptr)` 鏍囧噯搴撳唴閮ㄩ攣锛圕++17 瀹炵幇缁嗚妭锛屼綆绔炰簤锛夆€斺€斿凡濡傚疄澹版槑锛埪?1.1锛夛紝M4 娑堥櫎** |
+| `CtTrace` | 鏃犻攣锛堜弗鏍煎崟绾跨▼锛屄?.9 濂戠害 #1锛孯ev 2 P1-4锛?| 鐑矾寰?|
+| `CtQueue` | `m_mutex` | 浠?`push`锛堣法绾跨▼鍏ラ槦锛夛紱`front/popFront` 褰掑睘绾跨▼鐙崰锛埪?.10 濂戠害 #4锛?|
+| `CtThreadAffinity` | 鏃犻攣锛堟暣鏁版瘮杈冿級 | 鐑矾寰?|
 
-**同步分发不触碰 `CtQueue` 的锁**（§7.10 契约 #4）；trace 无锁。跨线程 `post` 会触碰目标队列的 `m_mutex`——**异步路径允许锁**（§10.1）。**异步路径（post/源注入）允许一次堆分配**：`CtQueueBase::pushAny` 的擦除持有者 `detail::CtAnyEventHolder<EventSet>`（§6.5/§7.10 契约 #7）——同步分发热路径不经过它（§11.1 审计不变）。
+**鍚屾鍒嗗彂涓嶈Е纰?`CtQueue` 鐨勯攣**锛埪?.10 濂戠害 #4锛夛紱trace 鏃犻攣銆傝法绾跨▼ `post` 浼氳Е纰扮洰鏍囬槦鍒楃殑 `m_mutex`鈥斺€?*寮傛璺緞鍏佽閿?*锛埪?0.1锛夈€?*寮傛璺緞锛坧ost/婧愭敞鍏ワ級鍏佽涓€娆″爢鍒嗛厤**锛歚CtQueueBase::pushAny` 鐨勬摝闄ゆ寔鏈夎€?`detail::CtAnyEventHolder<EventSet>`锛埪?.5/搂7.10 濂戠害 #7锛夆€斺€斿悓姝ュ垎鍙戠儹璺緞涓嶇粡杩囧畠锛埪?1.1 瀹¤涓嶅彉锛夈€?
+### 11.3 妲藉璞℃睜锛圡4锛屽彲鎺ㄨ繜锛?
+楂橀涓斿浐瀹氬ぇ灏忕殑鍥炶皟涓婁笅鏂囷紙瑙傚療鑰?filter 鍖呰锛夊彲鍦?M4 鐢?*瀵硅薄姹?*澶嶇敤 `std::function` 瀛樺偍锛屾秷闄ゆ敞鍐岃竟鐣岀殑鍒嗛厤鎶栧姩銆?*M1/M2 涓嶅疄鐜?*鈥斺€旀敞鍐屼笉鏄儹璺緞锛屾睜鍖栨敹鐩婂皬銆佸鏉傚害楂樸€傝 搂14 寮€鏀鹃棶棰?#5銆?
+### 11.4 trace 鐜閲忎笌鐩镐綅寮€閿€
 
-### 11.3 槽对象池（M4，可推迟）
-
-高频且固定大小的回调上下文（观察者/filter 包装）可在 M4 用**对象池**复用 `std::function` 存储，消除注册边界的分配抖动。**M1/M2 不实现**——注册不是热路径，池化收益小、复杂度高。见 §14 开放问题 #5。
-
-### 11.4 trace 环容量与相位开销
-
-- `kCapacity = 4096`（§7.9 契约 #5）：覆盖最旧记录，`sequence()` 单调不回的断言基准。
-- 6 相位（`kDispatched/kFiltered/kDelivered/kObserved/kQueued/kDropped`）各自开销恒定：一次槽位写入 + 一次 `sequence++`，**零分配零锁**（严格单线程，§7.9 契约 #1）。
-- `dump/clear` **不加锁不分配**（单线程独占，调试用途，非热路径，§7.9 契约 #7——Rev 2 P1-4 已删除"可加锁可分配"表述）。
-
-### 11.5 资源所有权汇总（继承约束 #3）
-
-| 资源 | 持有者 | 释放 |
+- `kCapacity = 4096`锛埪?.9 濂戠害 #5锛夛細瑕嗙洊鏈€鏃ц褰曪紝`sequence()` 鍗曡皟涓嶅洖鐨勬柇瑷€鍩哄噯銆?- 6 鐩镐綅锛坄kDispatched/kFiltered/kDelivered/kObserved/kQueued/kDropped`锛夊悇鑷紑閿€鎭掑畾锛氫竴娆℃Ы浣嶅啓鍏?+ 涓€娆?`sequence++`锛?*闆跺垎閰嶉浂閿?*锛堜弗鏍煎崟绾跨▼锛屄?.9 濂戠害 #1锛夈€?- `dump/clear` **涓嶅姞閿佷笉鍒嗛厤**锛堝崟绾跨▼鐙崰锛岃皟璇曠敤閫旓紝闈炵儹璺緞锛屄?.9 濂戠害 #7鈥斺€擱ev 2 P1-4 宸插垹闄?鍙姞閿佸彲鍒嗛厤"琛ㄨ堪锛夈€?
+### 11.5 璧勬簮鎵€鏈夋潈姹囨€伙紙缁ф壙绾︽潫 #3锛?
+| 璧勬簮 | 鎸佹湁鑰?| 閲婃斁 |
 |------|--------|------|
-| `CtReceiver` | 应用（`shared_ptr`） | 应用析构；表内仅 weak_ptr |
-| `CtHandlerToken` | 应用（move-only） | 析构自动注销（§9.2） |
-| `CtEvent` | 栈/队列（值语义） | 作用域/出队 |
-| `CtTrace` 环 | dispatcher（成员） | dispatcher 析构 |
-| `CtQueue` | loop（成员，每线程一个） | loop 析构 |
-| `CtEventSource` | loop（`shared_ptr`） | loop 析构 |
-| COW 快照 | 分发临时持有 | 引用计数归零 |
+| `CtReceiver` | 搴旂敤锛坄shared_ptr`锛?| 搴旂敤鏋愭瀯锛涜〃鍐呬粎 weak_ptr |
+| `CtHandlerToken` | 搴旂敤锛坢ove-only锛?| 鏋愭瀯鑷姩娉ㄩ攢锛埪?.2锛?|
+| `CtEvent` | 鏍?闃熷垪锛堝€艰涔夛級 | 浣滅敤鍩?鍑洪槦 |
+| `CtTrace` 鐜?| dispatcher锛堟垚鍛橈級 | dispatcher 鏋愭瀯 |
+| `CtQueue` | loop锛堟垚鍛橈紝姣忕嚎绋嬩竴涓級 | loop 鏋愭瀯 |
+| `CtEventSource` | loop锛坄shared_ptr`锛?| loop 鏋愭瀯 |
+| COW 蹇収 | 鍒嗗彂涓存椂鎸佹湁 | 寮曠敤璁℃暟褰掗浂 |
 
-## 12. 实现与逐文件改动指引（Implementation Guide）
+## 12. 瀹炵幇涓庨€愭枃浠舵敼鍔ㄦ寚寮曪紙Implementation Guide锛?
+鏈妭缁欑紪鐮佸瓙agent 鐨?*瀹炴柦椤哄簭**涓庢瘡鏂囦欢鐨勮惤鍦拌鐐广€侻1 鑼冨洿 = 鍚屾鏍稿績锛汳2 鑼冨洿 = 寮傛鏍稿績锛埪?.2锛夈€?
+### 12.1 M1 瀹炴柦椤哄簭锛堝悓姝ユ牳蹇冿級
 
-本节给编码子agent 的**实施顺序**与每文件的落地要点。M1 范围 = 同步核心；M2 范围 = 异步核心（§4.2）。
+鎸変緷璧栨嫇鎵戞帓搴忥紝姣忔鍙嫭绔嬬紪璇?+ 娴嬭瘯锛?
+1. `ct_thread_affinity.h`锛埪?.14锛夆€斺€擿CtThreadId`/`currentThreadId()`/`CtThreadAffinity`锛堝钩鍙?API `GetCurrentThreadId`锛夈€?2. `ct_type_key.h`锛埪?.1锛夆€斺€擿CtTypeKey<T>`銆乣detail::CtTypeAnchor`銆乣fnv1a`锛坉etail锛夈€乣CRISP_EVENT_TYPE` 瀹忋€?3. `ct_event.h`锛埪?.2/搂7.3 淇敼锛夆€斺€擿CtEventTraits`锛堝己鍒剁壒鍖栵級銆乣CtTracePhase`锛? 鐩镐綅锛?*绉诲叆鏈ご**锛孯ev 7, P1-3锛夈€乣CtEvent<T>`锛坄origin` 鏀瑰悕銆乣sequence/priority` + friend `CtDispatcherBase`/`CtDispatcher`/`CtQueue`銆佺鏈?`setSequence`銆?*public `setPriority`**銆佹瀯閫犻噸杞?`enable_if` 娑堟 + `<tuple>`锛夈€乣CtEventOrigin`銆乣CtDispatchResult`锛堟敼鍚嶏級銆?4. `ct_event_set.h`锛埪?.4锛夆€斺€擿CtEventSet<Ts...>`銆乣CtAnyEvent`銆乣visitEvent`銆?5. `ct_dispatch_context.h`锛埪?.6锛夆€斺€擿CtDispatchContext`锛堢鏈夐粯璁ゆ瀯閫?+ 4 friend锛?*涓?include ct_trace.h**锛屼粠 ct_event.h 鍙?CtTracePhase锛夈€?6. `ct_handler_token.h`锛埪?.7 + 搂7.15锛夆€斺€擿CtHandlerId`銆乣detail::CtTokenState`銆乣CtHandlerToken`锛堟棤 `m_id`/`reset()`锛宍~CtHandlerToken() noexcept`锛?*寮€澶村墠缃０鏄?`CtDispatcherBase`**锛夈€乣CtHandlerPriority`銆?7. `ct_receiver.h`锛埪?.5锛夆€斺€擿CtReceiver`锛坄enable_shared_from_this`銆乤ffinity銆乣bindHandler`锛?*include ct_handler_token.h + `<vector>`銆佸墠缃０鏄?`CtDispatcher`/`CtDispatcherBase`銆佷笉 include ct_dispatcher.h**銆?*`m_dispatchers` 寮卞紩鐢ㄥ垪琛紙Rev 12, P2-A锛?*锛夈€乣createReceiver` 宸ュ巶銆?8. `ct_trace.h`锛埪?.9 淇敼锛夆€斺€擿CtTraceRecord`銆乣CtTrace`锛堟棤閿佺幆锛?*鐩镐綅浠?ct_event.h 鍙?*锛屼笉閲嶅瀹氫箟锛夈€?9. `ct_dispatcher.h`锛埪?.8 淇敼 + 搂8锛夆€斺€擿CtDispatcherBase`锛圕OW 琛ㄣ€乣unregisterHandler`銆?*`unregisterReceiver(objectId)`锛圧ev 12, P2-A锛?*銆乣dispatchAny` 绾櫄 + `CtPendingEventBase` 鍓嶇疆澹版槑銆?*friend `CtHandlerToken`/`CtEventLoop`/`CtReceiver`**銆乨ebug-only `m_inDispatch`锛圢DEBUG 绌烘垚鍛橈級銆?*`m_tokenStates` 寮卞紩鐢ㄩ泦鍚?*銆?*`m_nextSequence` 鍚屾璁℃暟鍣?*锛夈€乣CtDispatcher<EventSet>`锛坄addHandler/addFilter/addObserver`銆乣send/broadcast` 鍏ㄧ绾裤€乣post/postTo` 鍗犱綅銆?*`dispatchAny` override 澹版槑 + M1 涓嶅彲杈?stub 瀹氫箟**锛坄assert(false)` 绌轰綋鈥斺€擿CtPendingEventBase` 瀹屾暣绫诲瀷鍦?ct_queue.h锛圡2锛夛紝寮曠敤鍙傛暟 + 绌轰綋涓嶉渶瑕佸畬鏁寸被鍨嬶紝閾炬帴鍗冲彲鐢紝Rev 8, P1-4锛夛級銆?*M2 鐪熷疄瀹氫箟钀界偣**锛歚ct_dispatcher.h` include `ct_queue.h` 鍚庡疄鐜板畬鏁?`dispatchAny`锛坕nclude 鏂瑰悜鏃犵幆锛歞ispatcher鈫抭ueue鈫抮eceiver/event锛宷ueue 涓嶅弽鍚?include dispatcher锛夈€?10. `ct_errors.h`锛埪?.13锛夆€斺€擿CtEventError`銆乣CtEventErrorKind`銆乣CtAffinityError`/`CtNoQueueError` 鍒悕銆乣makeError`銆?
+**姣忔枃浠惰惤鍦版鏌?*锛氬ご鏂囦欢鑷寘鍚紙`#pragma once` + 瀹屾暣 include锛屄?.3锛夛紱妯℃澘瀹炵幇鍙斁澶存枃浠讹紙璇█瑕佹眰渚嬪锛夛紱闈炴ā鏉挎満鍒惰繘 `.cpp`锛圡1 璧峰簱鏀?`add_library(crisp_event STATIC)`锛屄?.3锛夈€?*include 鏂瑰悜鍞竴**锛歚ct_dispatcher.h` 鈫?`ct_receiver.h` 鈫?`ct_event.h`锛沗ct_dispatch_context.h` 涓?include `ct_trace.h`锛埪?.6 P1-3锛夆€斺€攔eceiver 涓嶅緱鍙嶅悜 include dispatcher锛埪?.5 P1-4锛夈€?
+### 12.2 M2 瀹炴柦椤哄簭锛堝紓姝ユ牳蹇冿級
 
-### 12.1 M1 实施顺序（同步核心）
+1. `ct_queue.h`锛埪?.10锛夆€斺€擿CtPendingEventBase`锛堝叕寮€鎶借薄鍩虹被锛屼粎寮曠敤璇箟锛宍isBroadcast()` 鏋勯€犳椂鍥哄寲銆佸垽绌烘柟鍚?`!绌?owner_before(target)`锛夈€乣CtPendingEvent<EventSet>`锛堢户鎵?+ 瀛?variant + ctor 璁?`m_isBroadcast`/`sequence`锛夈€乣CtQueueBase`锛坄pushAny(unique_ptr<detail::CtAnyEventBase>)/front/popFront/popDropped/size/trace/affinityThread`/`eventSetId`锛?*pushAny 鏃?priority 鍙傛暟** Rev 10 P1-A锛夈€乣CtQueue<EventSet>`锛堜紭鍏堢骇鎻掑叆銆乣push` 杩斿洖 bool銆乣front` 璁?kQueued銆乣popDropped` 璁?kDropped銆佽嚜甯?`trace()`/`m_trace`銆?*`m_seqCounter` 鍏ラ槦搴?stamp锛坰equence 鍗曚竴鏉ユ簮锛?*銆乣pushAny` 瑕嗗啓 + **set 韬唤鏂█ + 閿柇瑷€** static_cast锛夈€乣detail::CtAnyEventBase`锛堥潪妯℃澘鎺ュ彛锛屽惈 `eventSetId()`锛? `detail::CtAnyEventHolder<EventSet>`锛堝叿浣撴寔鏈夎€咃紝const/闈?const `value()`锛夈€?2. `ct_event_loop.h`锛埪?.11锛夆€斺€擿CtEventLoop`锛坄exec/quit`銆乣setDispatcher` 鍐?*鎯版€у缓闃熷垪**锛堝綊灞?= 璋冪敤绾跨▼锛岀‖濂戠害鍚?EventSet 浠呬竴娆★紝**鏂█ dispatcher 鍚岀嚎绋?*锛夈€乣queue()` 鍓嶇疆鏉′欢銆乣current()`/`attachToCurrentThread()` TLS 璺敱 + 鏋愭瀯娉ㄩ攢銆?*`attachSource/detachSource` + 婧愬鍣?+ `injectEvent<EventSet, T>`锛堝簲鐢?妗ユ帴灞傛墜宸ユ敞鍏ラ€氶亾锛宍eventSetId()` 鏂█鍚庝笅杞瀷锛孯ev 10 P2-A锛?*锛夈€?3. `ct_event_source.h`锛埪?.12锛夆€斺€擿CtEventSource` 鎶借薄鎺ュ彛锛?*鍐呭缓婧愭ā鏉垮寲鏂规 A 棣栭€?*鈥斺€旈潪妯℃澘婧愭棤娉ㄥ叆閫氶亾锛孯ev 10 P2-A锛夈€?4. `ct_timer_event_source.h` + `ManualEventSource`锛埪?.12 濂戠害 #4锛夆€斺€斿唴寤烘簮瀹炵幇锛?*鎼哄甫 EventSet 绫诲瀷鍙傛暟**锛沗setAffinityThread` 鐢?attachSource 璋冪敤锛孯ev 12, P2-B锛夈€?5. `post/postTo` 瀹屾暣瀹炵幇锛埪?0.1锛屽惈"绾跨▼鈫抣oop鈫掗槦鍒?璺敱銆乣pushAny` 鎿﹂櫎鍏ラ槦銆佽法 EventSet 鏂█/drop銆乣dispatchAny` 鎺掔┖锛夈€?
+### 12.3 蹇呴』閬靛畧鐨勫懡鍚嶄笌椋庢牸锛圓GENTS.md 寮哄埗锛?
+- 绫?缁撴瀯浣?`Ct` 鍓嶇紑銆佹灇涓惧€?`k` 鍓嶇紑銆佹垚鍛?`m_` 鍓嶇紑銆侀潤鎬佹垚鍛?`s_` 鍓嶇紑銆佹柟娉?`lowerCamelCase()`銆佸父閲?`k` 鍓嶇紑銆?- 鍑芥暟鍗曚竴鑱岃矗銆佸嚱鏁颁綋 鈮?60 琛岋紱鍏紑 API 鑻辨枃 Doxygen 娉ㄩ噴銆?- C++17銆佹棤瑁?`new`/`delete`銆佹棤 C 椋庢牸 cast锛堝敮涓€璞佸厤 = 搂6.1 鍦板潃娲剧敓閿級銆佹棤 moc/浠ｇ爜鐢熸垚銆?- 涓嶇敤 `std::filesystem`锛圡inGW 8.1 bug锛夈€?
+## 13. 娴嬭瘯璁″垝锛圱est Plan锛?
+鎵嬪啓 test double锛?*绂佹 mock 妗嗘灦**锛孉GENTS.md锛夈€傛祴璇曠洰褰?`tests/event/`锛孋Make 闆嗘垚娌跨敤鐜版湁 harness锛坄tests/event/CMakeLists.txt`锛夈€傛瘡鏉℃祴璇曞搴斾竴鏉″绾︼紝**濂戠害鍙樺寲蹇呴』鍚屾娴嬭瘯**銆?
+### 13.1 M1 娴嬭瘯娓呭崟锛堝悓姝ユ牳蹇冿級
 
-按依赖拓扑排序，每步可独立编译 + 测试：
+1. **閿敮涓€鎬э紙璺?TU锛?*锛氫袱涓?TU 鍚勬敞鍐屽悓鍨?`T` 鐨?handler锛屾柇瑷€ `CtTypeKey<T>::value()` 鐩哥瓑锛涗笉鍚岀被鍨嬮敭涓嶇瓑銆偮?.1/搂7.1 濂戠害 #1鈥?2銆傦紙搂13.2 鐨勮法 TU 鐢ㄤ緥鍗虫銆傦級
+2. **寮哄埗鐗瑰寲**锛氭湭鐗瑰寲 `CtEventTraits<T>` 鐨?`CtEvent<T>` 缂栬瘧澶辫触锛坄static_assert`锛夈€偮?.2銆?3. **COW 蹇収涓€鑷存€?*锛氬垎鍙戜腑閫旀敞鍐?娉ㄩ攢锛屾柇瑷€鏈鍒嗗彂瑙嗗浘涓嶅彉锛埪?.4 濂戠害 #1鈥?4锛夈€傜敤瑙傚療鑰呰鏁?+ 鍒嗗彂鍐?token 鏋愭瀯楠岃瘉銆?4. **weak_ptr 璺宠繃**锛歳eceiver 鏋愭瀯鍚庯紝蹇収娈嬬暀鏉＄洰琚?`lock()` 璺宠繃銆佷笉璋冪敤 handler锛埪?.1 濂戠害 #3锛夈€?5. **token 鐢熷懡鍛ㄦ湡**锛歮ove-only銆佹瀽鏋勬敞閿€銆乼oken 姣?dispatcher 闀垮涓?UB锛埪?.2锛夈€?6. **send 褰掑睘鏂█**锛氶潪褰掑睘绾跨▼ `send` 鈫?debug 鏂█澶辫触 / release 杩斿洖 `kUnhandled` 涓旇 `kWrongThread`锛埪?.1 Step 1銆伮?.13锛夈€?7. **杩囨护鍣ㄦ帓搴?*锛氭敞鍐?`kHigh/kNormal/kLow` 鍚勪竴锛屾柇瑷€鎵ц椤哄簭涓?`filterIndex()`锛埪?.15銆伮?.3锛夈€?8. **棣栦釜 accept 鍋滄**锛氫袱涓?handler锛岀涓€涓?accept 鈫?绗簩涓笉璋冪敤锛埪?.1 Step 6锛夈€?9. **broadcast OR 璇箟**锛氫换涓€ handler accept 鈫?`kHandled`锛涘叏 ignore 鈫?`kUnhandled`锛涙棤瀛樻椿鐩爣 鈫?`kNoReceiver`锛埪?.2锛夈€?10. **瑙傚療鑰?pre/post**锛氳瀵熻€呰褰?`phase()`锛屾柇瑷€ pre/post 鍚勪竴娆°€佹嫤鎴椂涓嶈Е鍙?post锛埪?.3锛夈€?11. **trace 鐩镐綅**锛氫竴娆″畬鏁?send 浜х敓 `kDispatched/kObserved/kDelivered/kObserved` 搴忓垪锛涙嫤鎴骇鐢?`kDispatched/kObserved/kFiltered` 涓旀棤 post锛埪?.9/搂8.1/搂8.3锛夈€?12. **鐑矾寰勯浂鍒嗛厤**锛氬垎閰嶈鏁板櫒锛堣嚜瀹氫箟 `operator new` 璁℃暟鎴栧钩鍙?API锛夋柇瑷€涓€娆?send 妗嗘灦渚ч浂鍒嗛厤锛埪?1.1锛夈€?
+### 13.2 M1 璺?TU 娴嬭瘯
 
-1. `ct_thread_affinity.h`（§7.14）——`CtThreadId`/`currentThreadId()`/`CtThreadAffinity`（平台 API `GetCurrentThreadId`）。
-2. `ct_type_key.h`（§7.1）——`CtTypeKey<T>`、`detail::CtTypeAnchor`、`fnv1a`（detail）、`CRISP_EVENT_TYPE` 宏。
-3. `ct_event.h`（§7.2/§7.3 修改）——`CtEventTraits`（强制特化）、`CtTracePhase`（6 相位，**移入本头**，Rev 7, P1-3）、`CtEvent<T>`（`origin` 改名、`sequence/priority` + friend `CtDispatcherBase`/`CtDispatcher`/`CtQueue`、私有 `setSequence`、**public `setPriority`**、构造重载 `enable_if` 消歧 + `<tuple>`）、`CtEventOrigin`、`CtDispatchResult`（改名）。
-4. `ct_event_set.h`（§7.4）——`CtEventSet<Ts...>`、`CtAnyEvent`、`visitEvent`。
-5. `ct_dispatch_context.h`（§7.6）——`CtDispatchContext`（私有默认构造 + 4 friend，**不 include ct_trace.h**，从 ct_event.h 取 CtTracePhase）。
-6. `ct_handler_token.h`（§7.7 + §7.15）——`CtHandlerId`、`detail::CtTokenState`、`CtHandlerToken`（无 `m_id`/`reset()`，`~CtHandlerToken() noexcept`，**开头前置声明 `CtDispatcherBase`**）、`CtHandlerPriority`。
-7. `ct_receiver.h`（§7.5）——`CtReceiver`（`enable_shared_from_this`、affinity、`bindHandler`，**include ct_handler_token.h + `<vector>`、前置声明 `CtDispatcher`/`CtDispatcherBase`、不 include ct_dispatcher.h**、**`m_dispatchers` 弱引用列表（Rev 12, P2-A）**）、`createReceiver` 工厂。
-8. `ct_trace.h`（§7.9 修改）——`CtTraceRecord`、`CtTrace`（无锁环；**相位从 ct_event.h 取**，不重复定义）。
-9. `ct_dispatcher.h`（§7.8 修改 + §8）——`CtDispatcherBase`（COW 表、`unregisterHandler`、**`unregisterReceiver(objectId)`（Rev 12, P2-A）**、`dispatchAny` 纯虚 + `CtPendingEventBase` 前置声明、**friend `CtHandlerToken`/`CtEventLoop`/`CtReceiver`**、debug-only `m_inDispatch`（NDEBUG 空成员）、**`m_tokenStates` 弱引用集合**、**`m_nextSequence` 同步计数器**）、`CtDispatcher<EventSet>`（`addHandler/addFilter/addObserver`、`send/broadcast` 全管线、`post/postTo` 占位、**`dispatchAny` override 声明 + M1 不可达 stub 定义**（`assert(false)` 空体——`CtPendingEventBase` 完整类型在 ct_queue.h（M2），引用参数 + 空体不需要完整类型，链接即可用，Rev 8, P1-4））。**M2 真实定义落点**：`ct_dispatcher.h` include `ct_queue.h` 后实现完整 `dispatchAny`（include 方向无环：dispatcher→queue→receiver/event，queue 不反向 include dispatcher）。
-10. `ct_errors.h`（§7.13）——`CtEventError`、`CtEventErrorKind`、`CtAffinityError`/`CtNoQueueError` 别名、`makeError`。
+`tests/event/` 涓嬪缓 `tu_a.cpp` / `tu_b.cpp` 涓?TU锛屽悇鐗瑰寲鍚屽瀷 `T` 鐨?traits 骞舵敞鍐?handler锛屼富娴嬭瘯鏂█涓?TU 鐨勯敭涓庡垎鍙戣涓轰竴鑷达紙搂6.1 鐨?ODR/ICF 鍏虫敞鐐癸紝搂6.1 濂戠害 #3锛夈€?
+### 13.3 M2 娴嬭瘯娓呭崟锛堝紓姝ユ牳蹇冿級
 
-**每文件落地检查**：头文件自包含（`#pragma once` + 完整 include，§5.3）；模板实现可放头文件（语言要求例外）；非模板机制进 `.cpp`（M1 起库改 `add_library(crisp_event STATIC)`，§5.3）。**include 方向唯一**：`ct_dispatcher.h` → `ct_receiver.h` → `ct_event.h`；`ct_dispatch_context.h` 不 include `ct_trace.h`（§7.6 P1-3）——receiver 不得反向 include dispatcher（§7.5 P1-4）。
-
-### 12.2 M2 实施顺序（异步核心）
-
-1. `ct_queue.h`（§7.10）——`CtPendingEventBase`（公开抽象基类，仅引用语义，`isBroadcast()` 构造时固化、判空方向 `!空.owner_before(target)`）、`CtPendingEvent<EventSet>`（继承 + 存 variant + ctor 设 `m_isBroadcast`/`sequence`）、`CtQueueBase`（`pushAny(unique_ptr<detail::CtAnyEventBase>)/front/popFront/popDropped/size/trace/affinityThread`/`eventSetId`，**pushAny 无 priority 参数** Rev 10 P1-A）、`CtQueue<EventSet>`（优先级插入、`push` 返回 bool、`front` 记 kQueued、`popDropped` 记 kDropped、自带 `trace()`/`m_trace`、**`m_seqCounter` 入队序 stamp（sequence 单一来源）**、`pushAny` 覆写 + **set 身份断言 + 键断言** static_cast）、`detail::CtAnyEventBase`（非模板接口，含 `eventSetId()`）+ `detail::CtAnyEventHolder<EventSet>`（具体持有者，const/非 const `value()`）。
-2. `ct_event_loop.h`（§7.11）——`CtEventLoop`（`exec/quit`、`setDispatcher` 内**惰性建队列**（归属 = 调用线程，硬契约同 EventSet 仅一次，**断言 dispatcher 同线程**）、`queue()` 前置条件、`current()`/`attachToCurrentThread()` TLS 路由 + 析构注销、**`attachSource/detachSource` + 源容器 + `injectEvent<EventSet, T>`（应用/桥接层手工注入通道，`eventSetId()` 断言后下转型，Rev 10 P2-A）**）。
-3. `ct_event_source.h`（§7.12）——`CtEventSource` 抽象接口（**内建源模板化方案 A 首选**——非模板源无注入通道，Rev 10 P2-A）。
-4. `ct_timer_event_source.h` + `ManualEventSource`（§7.12 契约 #4）——内建源实现（**携带 EventSet 类型参数**；`setAffinityThread` 由 attachSource 调用，Rev 12, P2-B）。
-5. `post/postTo` 完整实现（§10.1，含"线程→loop→队列"路由、`pushAny` 擦除入队、跨 EventSet 断言/drop、`dispatchAny` 排空）。
-
-### 12.3 必须遵守的命名与风格（AGENTS.md 强制）
-
-- 类/结构体 `Ct` 前缀、枚举值 `k` 前缀、成员 `m_` 前缀、静态成员 `s_` 前缀、方法 `lowerCamelCase()`、常量 `k` 前缀。
-- 函数单一职责、函数体 ≤ 60 行；公开 API 英文 Doxygen 注释。
-- C++17、无裸 `new`/`delete`、无 C 风格 cast（唯一豁免 = §6.1 地址派生键）、无 moc/代码生成。
-- 不用 `std::filesystem`（MinGW 8.1 bug）。
-
-## 13. 测试计划（Test Plan）
-
-手写 test double（**禁止 mock 框架**，AGENTS.md）。测试目录 `tests/event/`，CMake 集成沿用现有 harness（`tests/event/CMakeLists.txt`）。每条测试对应一条契约，**契约变化必须同步测试**。
-
-### 13.1 M1 测试清单（同步核心）
-
-1. **键唯一性（跨 TU）**：两个 TU 各注册同型 `T` 的 handler，断言 `CtTypeKey<T>::value()` 相等；不同类型键不等。§6.1/§7.1 契约 #1–#2。（§13.2 的跨 TU 用例即此。）
-2. **强制特化**：未特化 `CtEventTraits<T>` 的 `CtEvent<T>` 编译失败（`static_assert`）。§7.2。
-3. **COW 快照一致性**：分发中途注册/注销，断言本次分发视图不变（§8.4 契约 #1–#4）。用观察者计数 + 分发内 token 析构验证。
-4. **weak_ptr 跳过**：receiver 析构后，快照残留条目被 `lock()` 跳过、不调用 handler（§9.1 契约 #3）。
-5. **token 生命周期**：move-only、析构注销、token 比 dispatcher 长寿不 UB（§9.2）。
-6. **send 归属断言**：非归属线程 `send` → debug 断言失败 / release 返回 `kUnhandled` 且记 `kWrongThread`（§8.1 Step 1、§7.13）。
-7. **过滤器排序**：注册 `kHigh/kNormal/kLow` 各一，断言执行顺序与 `filterIndex()`（§7.15、§8.3）。
-8. **首个 accept 停止**：两个 handler，第一个 accept → 第二个不调用（§8.1 Step 6）。
-9. **broadcast OR 语义**：任一 handler accept → `kHandled`；全 ignore → `kUnhandled`；无存活目标 → `kNoReceiver`（§8.2）。
-10. **观察者 pre/post**：观察者记录 `phase()`，断言 pre/post 各一次、拦截时不触发 post（§8.3）。
-11. **trace 相位**：一次完整 send 产生 `kDispatched/kObserved/kDelivered/kObserved` 序列；拦截产生 `kDispatched/kObserved/kFiltered` 且无 post（§7.9/§8.1/§8.3）。
-12. **热路径零分配**：分配计数器（自定义 `operator new` 计数或平台 API）断言一次 send 框架侧零分配（§11.1）。
-
-### 13.2 M1 跨 TU 测试
-
-`tests/event/` 下建 `tu_a.cpp` / `tu_b.cpp` 两 TU，各特化同型 `T` 的 traits 并注册 handler，主测试断言两 TU 的键与分发行为一致（§6.1 的 ODR/ICF 关注点，§6.1 契约 #3）。
-
-### 13.3 M2 测试清单（异步核心）
-
-1. **队列排序确定性**：同 priority 事件按插入序出队；不同 priority 按数值降序（§10.3 契约 #4）。
-2. **归属断言**：`front/popFront` 非归属线程断言失败；`exec` 非归属线程断言失败（§7.10/§7.11）。
-3. **post 受理语义（Rev 4, P1-1 + Rev 5 同步）**：`post` 返回 `kHandled`（受理）；溢出返回 `kUnhandled`；`kQueued` 由 `CtQueue::front()` 成功时记录、`kDropped` 由 `CtQueue::popDropped()` 记录（§7.10 契约 #6、§10.1 契约 #3）——断言相位记录发生在归属线程、队列的独立 trace 中。
-4. **广播/定向判定（Rev 7, P1-2 新增）**：定向 post（非空 target）的 `CtPendingEvent::isBroadcast() == false`、广播 post（空 target）的 `isBroadcast() == true`——验证 `owner_before` 判空方向正确（定向事件不被误标为广播、异步广播不被静默丢弃）；排空后两类事件都到达 handler（§6.5/§7.10/§7.11）。
-5. **定时器源**：`CtTimerEventSource` 按周期注入事件、`deactivate` 停止（§7.12 契约 #4）。
-6. **ManualEventSource**：测试用手工注入事件、经 loop 排空进分发管线（§7.12）。
-
-## 14. 开放问题（Open Questions for Review）
-
-以下问题不阻塞 M1 同步核心实现，但**架构评审须逐条拍板**；未定前编码子agent 按括号内的"当前倾向"执行：
-
-1. **03 偏差清单完整性**（§10.4）：03 方案是否有本文档未覆盖的条款？**状态：已关闭（Rev 4）**——§10.4 偏差表 8 项已补全，未再发现遗漏；若后续评审发现新偏差，追加进 §10.4 表。
-2. **post 返回值类型**：`post/postTo` 复用 `CtDispatchResult`（受理语义）还是引入 `CtPostResult`？**当前倾向**：复用，避免 API churn（§10.1 契约 #3）。
-3. **分发中 dispatcher 析构护栏**：M1 是否加 debug 深度计数器护栏（`m_inDispatch` 计数 + 析构断言）？**状态：已裁定（Rev 3 回写 §7.8/§9.2）**——加，M1 落实 `m_inDispatch` debug 护栏（NDEBUG 下为空成员，Rev 6 P1-3），release 零开销。
-4. **线程迁移 `rebindToCurrentThread`**：M1 不实现，语义是否保留在文档？**当前倾向**：保留（§7.14 契约 #5），M4 再实现。
-5. **槽对象池（§11.3）**：M4 是否做？**当前倾向**：性能剖析驱动，暂不承诺。
-6. **接收者反向索引**：M4 是否加"接收者→条目"反向索引做主动回收（§9.1 契约 #4）？**当前倾向**：不加（惰性回收 + weak_ptr 足够），除非剖析证明需要。
-7. **`CtThreadId` 数值化方式**：`std::hash<std::thread::id>` 还是平台 API（Windows `GetCurrentThreadId`）？**状态：已裁定（Rev 4 回写 §7.14 契约 #1）**——平台 API，跨平台留接口抽象。
-8. **`CtEventLoop` 等待模型**：M2 用条件变量还是平台事件（M4 epoll/select 桥）？**当前倾向**：条件变量（纯 C++17、无平台依赖），M4 加平台等待。
-
+1. **闃熷垪鎺掑簭纭畾鎬?*锛氬悓 priority 浜嬩欢鎸夋彃鍏ュ簭鍑洪槦锛涗笉鍚?priority 鎸夋暟鍊奸檷搴忥紙搂10.3 濂戠害 #4锛夈€?2. **褰掑睘鏂█**锛歚front/popFront` 闈炲綊灞炵嚎绋嬫柇瑷€澶辫触锛沗exec` 闈炲綊灞炵嚎绋嬫柇瑷€澶辫触锛埪?.10/搂7.11锛夈€?3. **post 鍙楃悊璇箟锛圧ev 4, P1-1 + Rev 5 鍚屾锛?*锛歚post` 杩斿洖 `kHandled`锛堝彈鐞嗭級锛涙孩鍑鸿繑鍥?`kUnhandled`锛沗kQueued` 鐢?`CtQueue::front()` 鎴愬姛鏃惰褰曘€乣kDropped` 鐢?`CtQueue::popDropped()` 璁板綍锛埪?.10 濂戠害 #6銆伮?0.1 濂戠害 #3锛夆€斺€旀柇瑷€鐩镐綅璁板綍鍙戠敓鍦ㄥ綊灞炵嚎绋嬨€侀槦鍒楃殑鐙珛 trace 涓€?4. **骞挎挱/瀹氬悜鍒ゅ畾锛圧ev 7, P1-2 鏂板锛?*锛氬畾鍚?post锛堥潪绌?target锛夌殑 `CtPendingEvent::isBroadcast() == false`銆佸箍鎾?post锛堢┖ target锛夌殑 `isBroadcast() == true`鈥斺€旈獙璇?`owner_before` 鍒ょ┖鏂瑰悜姝ｇ‘锛堝畾鍚戜簨浠朵笉琚鏍囦负骞挎挱銆佸紓姝ュ箍鎾笉琚潤榛樹涪寮冿級锛涙帓绌哄悗涓ょ被浜嬩欢閮藉埌杈?handler锛埪?.5/搂7.10/搂7.11锛夈€?5. **瀹氭椂鍣ㄦ簮**锛歚CtTimerEventSource` 鎸夊懆鏈熸敞鍏ヤ簨浠躲€乣deactivate` 鍋滄锛埪?.12 濂戠害 #4锛夈€?6. **ManualEventSource**锛氭祴璇曠敤鎵嬪伐娉ㄥ叆浜嬩欢銆佺粡 loop 鎺掔┖杩涘垎鍙戠绾匡紙搂7.12锛夈€?
+## 14. 寮€鏀鹃棶棰橈紙Open Questions for Review锛?
+浠ヤ笅闂涓嶉樆濉?M1 鍚屾鏍稿績瀹炵幇锛屼絾**鏋舵瀯璇勫椤婚€愭潯鎷嶆澘**锛涙湭瀹氬墠缂栫爜瀛恆gent 鎸夋嫭鍙峰唴鐨?褰撳墠鍊惧悜"鎵ц锛?
+1. **03 鍋忓樊娓呭崟瀹屾暣鎬?*锛埪?0.4锛夛細03 鏂规鏄惁鏈夋湰鏂囨。鏈鐩栫殑鏉℃锛?*鐘舵€侊細宸插叧闂紙Rev 4锛?*鈥斺€斅?0.4 鍋忓樊琛?8 椤瑰凡琛ュ叏锛屾湭鍐嶅彂鐜伴仐婕忥紱鑻ュ悗缁瘎瀹″彂鐜版柊鍋忓樊锛岃拷鍔犺繘 搂10.4 琛ㄣ€?2. **post 杩斿洖鍊肩被鍨?*锛歚post/postTo` 澶嶇敤 `CtDispatchResult`锛堝彈鐞嗚涔夛級杩樻槸寮曞叆 `CtPostResult`锛?*褰撳墠鍊惧悜**锛氬鐢紝閬垮厤 API churn锛埪?0.1 濂戠害 #3锛夈€?3. **鍒嗗彂涓?dispatcher 鏋愭瀯鎶ゆ爮**锛歁1 鏄惁鍔?debug 娣卞害璁℃暟鍣ㄦ姢鏍忥紙`m_inDispatch` 璁℃暟 + 鏋愭瀯鏂█锛夛紵**鐘舵€侊細宸茶瀹氾紙Rev 3 鍥炲啓 搂7.8/搂9.2锛?*鈥斺€斿姞锛孧1 钀藉疄 `m_inDispatch` debug 鎶ゆ爮锛圢DEBUG 涓嬩负绌烘垚鍛橈紝Rev 6 P1-3锛夛紝release 闆跺紑閿€銆?4. **绾跨▼杩佺Щ `rebindToCurrentThread`**锛歁1 涓嶅疄鐜帮紝璇箟鏄惁淇濈暀鍦ㄦ枃妗ｏ紵**褰撳墠鍊惧悜**锛氫繚鐣欙紙搂7.14 濂戠害 #5锛夛紝M4 鍐嶅疄鐜般€?5. **妲藉璞℃睜锛埪?1.3锛?*锛歁4 鏄惁鍋氾紵**褰撳墠鍊惧悜**锛氭€ц兘鍓栨瀽椹卞姩锛屾殏涓嶆壙璇恒€?6. **鎺ユ敹鑰呭弽鍚戠储寮?*锛歁4 鏄惁鍔?鎺ユ敹鑰呪啋鏉＄洰"鍙嶅悜绱㈠紩鍋氫富鍔ㄥ洖鏀讹紙搂9.1 濂戠害 #4锛夛紵**褰撳墠鍊惧悜**锛氫笉鍔狅紙鎯版€у洖鏀?+ weak_ptr 瓒冲锛夛紝闄ら潪鍓栨瀽璇佹槑闇€瑕併€?7. **`CtThreadId` 鏁板€煎寲鏂瑰紡**锛歚std::hash<std::thread::id>` 杩樻槸骞冲彴 API锛圵indows `GetCurrentThreadId`锛夛紵**鐘舵€侊細宸茶瀹氾紙Rev 4 鍥炲啓 搂7.14 濂戠害 #1锛?*鈥斺€斿钩鍙?API锛岃法骞冲彴鐣欐帴鍙ｆ娊璞°€?8. **`CtEventLoop` 绛夊緟妯″瀷**锛歁2 鐢ㄦ潯浠跺彉閲忚繕鏄钩鍙颁簨浠讹紙M4 epoll/select 妗ワ級锛?*褰撳墠鍊惧悜**锛氭潯浠跺彉閲忥紙绾?C++17銆佹棤骞冲彴渚濊禆锛夛紝M4 鍔犲钩鍙扮瓑寰呫€?
 ---
 
 ## READY_FOR_REVIEW
 
-本文档到达 **READY_FOR_REVIEW** 状态：§1–§8 为完整规范（含本轮新增的 §7.14 CtThreadAffinity、§7.15 CtHandlerPriority 与 §8 分发管线），§9–§14 为本轮补全的所有权/线程/性能/实现/测试/开放问题。请架构评审核对：§7.14/§7.15 与 §8 的衔接、§8.4 的 COW 注销语义、§9–§10 与 §4.2/§7.8 的引用一致性、§13 测试对契约的覆盖、§14 各开放问题的裁决。
+鏈枃妗ｅ埌杈?**READY_FOR_REVIEW** 鐘舵€侊細搂1鈥撀? 涓哄畬鏁磋鑼冿紙鍚湰杞柊澧炵殑 搂7.14 CtThreadAffinity銆伮?.15 CtHandlerPriority 涓?搂8 鍒嗗彂绠＄嚎锛夛紝搂9鈥撀?4 涓烘湰杞ˉ鍏ㄧ殑鎵€鏈夋潈/绾跨▼/鎬ц兘/瀹炵幇/娴嬭瘯/寮€鏀鹃棶棰樸€傝鏋舵瀯璇勫鏍稿锛毬?.14/搂7.15 涓?搂8 鐨勮鎺ャ€伮?.4 鐨?COW 娉ㄩ攢璇箟銆伮?鈥撀?0 涓?搂4.2/搂7.8 鐨勫紩鐢ㄤ竴鑷存€с€伮?3 娴嬭瘯瀵瑰绾︾殑瑕嗙洊銆伮?4 鍚勫紑鏀鹃棶棰樼殑瑁佸喅銆?
