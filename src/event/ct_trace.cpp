@@ -25,7 +25,11 @@ void CtTrace::record(std::string_view typeName, CtTracePhase phase,
 
 std::uint64_t CtTrace::sequence() const noexcept {
     // Same ownership contract as record(): owner thread only.
-    return m_count.load(std::memory_order_seq_cst);
+    // Returns the monotonic WRITE counter (m_writeSequence) — matches the
+    // doc "monotonic write counter"; count() is the retained-records count
+    // (audit SUGGEST fix: sequence() used to return m_count, duplicating
+    // count() and contradicting the header comment).
+    return m_writeSequence;
 }
 
 const CtTraceRecord& CtTrace::at(std::size_t i) const noexcept {

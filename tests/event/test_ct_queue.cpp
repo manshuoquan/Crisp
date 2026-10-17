@@ -1,4 +1,4 @@
-﻿// Unit tests for the M2 async core (CtQueue, CtEventLoop, sources, post).
+// Unit tests for the M2 async core (CtQueue, CtEventLoop, sources, post).
 //
 // Part of the CRISP event subsystem (crisp::event). Covers §13.3 contracts:
 // queue ordering determinism, affinity assertions, post accept semantics,
@@ -79,19 +79,19 @@ TEST_CASE(m2_queue_same_priority_keeps_insertion_order)
     EXPECT_TRUE(m1 != nullptr);
     EXPECT_EQ(m1->payload().x, 1);
 
-    queue.popFront();
+    queue.popFront(pe);
     EXPECT_EQ(queue.front(pe), true);
     auto* m2 = std::get_if<CtEvent<MousePayload>>(
         static_cast<TestEventSet::any_type*>(pe->payloadPtr()));
     EXPECT_EQ(m2->payload().x, 2);
 
-    queue.popFront();
+    queue.popFront(pe);
     EXPECT_EQ(queue.front(pe), true);
     auto* m3 = std::get_if<CtEvent<MousePayload>>(
         static_cast<TestEventSet::any_type*>(pe->payloadPtr()));
     EXPECT_EQ(m3->payload().x, 3);
 
-    queue.popFront();
+    queue.popFront(pe);
     EXPECT_EQ(queue.front(pe), false); // empty
 }
 
@@ -120,15 +120,15 @@ TEST_CASE(m2_queue_higher_priority_pops_first)
     // Expected order: high(20) → mid(15) → low(10).
     EXPECT_EQ(queue.front(pe), true);
     EXPECT_EQ(xOf(), 20);
-    queue.popFront();
+    queue.popFront(pe);
 
     EXPECT_EQ(queue.front(pe), true);
     EXPECT_EQ(xOf(), 15);
-    queue.popFront();
+    queue.popFront(pe);
 
     EXPECT_EQ(queue.front(pe), true);
     EXPECT_EQ(xOf(), 10);
-    queue.popFront();
+    queue.popFront(pe);
 
     EXPECT_EQ(queue.front(pe), false);
 }
@@ -225,7 +225,7 @@ TEST_CASE(m2_pending_broadcast_flag_fixed_at_push)
     EXPECT_EQ(queue.front(pe), true);
     EXPECT_EQ(pe->isBroadcast(), false);
     EXPECT_TRUE(!pe->target().expired());
-    queue.popFront();
+    queue.popFront(pe);
 
     // Broadcast (empty target): isBroadcast() must be true.
     CtEvent<MousePayload> broadcast(CtEventOrigin::kApplication, MousePayload{2, 2});
@@ -234,7 +234,7 @@ TEST_CASE(m2_pending_broadcast_flag_fixed_at_push)
     EXPECT_EQ(queue.front(pe), true);
     EXPECT_EQ(pe->isBroadcast(), true);
     EXPECT_TRUE(pe->target().expired()); // empty weak_ptr
-    queue.popFront();
+    queue.popFront(pe);
 }
 
 TEST_CASE(m2_expired_receiver_dropped_not_delivered)
@@ -293,7 +293,7 @@ TEST_CASE(m2_timer_source_injects_on_poll)
     EXPECT_TRUE(te != nullptr);
     EXPECT_EQ(te->payload().timerId, 42);
     EXPECT_EQ(te->origin(), CtEventOrigin::kSystem);
-    queue.popFront();
+    queue.popFront(pe);
 
     source->deactivate();
     // Deactivated: poll() enqueues nothing.
@@ -321,7 +321,7 @@ TEST_CASE(m2_manual_source_injects_exactly_once)
     auto* te = std::get_if<CtEvent<CtTimerPayload>>(any);
     EXPECT_TRUE(te != nullptr);
     EXPECT_EQ(te->payload().timerId, 99);
-    queue.popFront();
+    queue.popFront(pe);
 
     // Second poll: source exhausted, nothing more.
     source->poll(queue);
@@ -453,6 +453,84 @@ TEST_CASE(m2_record_async_drop_records_kdropped_in_queue_trace)
     // The drop hook does NOT enqueue anything (queue stays empty).
     CtPendingEventBase* pe = nullptr;
     EXPECT_EQ(queue.front(pe), false);
+}
+
+// --- front() kQueued records the real payload name (M4, 04 Rev 10 P3-2) ----
+
+TEST_CASE(m4_front_kqueued_records_real_type_name)
+{
+    // (M4) CtPendingEventBase::typeName() lets the queue's front() kQueued
+    // trace record the REAL payload name instead of the "<async>"
+    // placeholder (§7.10 contract #6). typeName() is a variant visit —
+    // zero allocation, affinity thread.
+    TestQueue queue;
+
+    auto receiver = makeReceiver();
+    CtEvent<MousePayload> ev(CtEventOrigin::kApplication, MousePayload{1, 1});
+    queue.push(std::weak_ptr<CtReceiver>(receiver), std::move(ev));
+
+    CtPendingEventBase* pe = nullptr;
+    EXPECT_EQ(queue.front(pe), true);
+
+    // The pending event knows its own payload name.
+    EXPECT_TRUE(pe->typeName() == "Mouse");
+
+    // The queue's kQueued trace record carries that name (not "<async>").
+    EXPECT_EQ(queue.trace().count(), 1u);
+    EXPECT_EQ(queue.trace().at(0).phase, CtTracePhase::kQueued);
+    EXPECT_TRUE(queue.trace().at(0).typeName == "Mouse");
+    queue.popFront(pe);
+
+    // A second payload type records its own name.
+    CtEvent<KeyPayload> keyEv(CtEventOrigin::kApplication, KeyPayload{7});
+    queue.push(std::weak_ptr<CtReceiver>{}, std::move(keyEv));
+    EXPECT_EQ(queue.front(pe), true);
+    EXPECT_TRUE(pe->typeName() == "Key");
+    EXPECT_EQ(queue.trace().count(), 2u);
+    EXPECT_EQ(queue.trace().at(1).phase, CtTracePhase::kQueued);
+    EXPECT_TRUE(queue.trace().at(1).typeName == "Key");
+    queue.popFront(pe);
+}
+
+// --- popFront removes BY IDENTITY: concurrent push cannot evict wrong ------
+// --- element (audit MUST-1 regression) ------------------------------------
+
+TEST_CASE(m4_pop_front_identity_removes_dispatched_not_new_insert)
+{
+    // (Audit MUST-1 fix) The drain loop is front() → dispatchAny() →
+    // popFront(). Between front() and popFront() another thread may push a
+    // HIGHER-priority event which the priority insertion places AHEAD of the
+    // dispatched element. A positional pop would remove the NEW event and
+    // leave the dispatched one queued (→ second dispatch); popFront(which)
+    // removes BY IDENTITY so the new event survives.
+    TestQueue queue;
+
+    // Low-priority event first: it becomes the front after the initial push.
+    CtEvent<MousePayload> low(CtEventOrigin::kApplication, MousePayload{10, 0});
+    low.setPriority(1);
+    queue.push(std::weak_ptr<CtReceiver>{}, std::move(low));
+
+    CtPendingEventBase* pe = nullptr;
+    EXPECT_EQ(queue.front(pe), true); // "dispatched" element now
+
+    // Simulate a cross-thread push DURING dispatch: higher priority event
+    // inserts AHEAD of the element pe points at.
+    CtEvent<KeyPayload> high(CtEventOrigin::kApplication, KeyPayload{99});
+    high.setPriority(1000);
+    queue.push(std::weak_ptr<CtReceiver>{}, std::move(high));
+
+    // The drain loop now calls popFront(pe) for the DISPATCHED (low) event.
+    queue.popFront(pe);
+
+    // The high-priority event must still be queued (and be the front).
+    EXPECT_EQ(queue.size(), 1u);
+    EXPECT_EQ(queue.front(pe), true);
+    auto* any = static_cast<TestEventSet::any_type*>(pe->payloadPtr());
+    auto* key = std::get_if<CtEvent<KeyPayload>>(any);
+    EXPECT_TRUE(key != nullptr); // the surviving event is the NEW one
+    EXPECT_EQ(key->payload().key, 99);
+    queue.popFront(pe);
+    EXPECT_EQ(queue.size(), 0u);
 }
 
 } // namespace (anonymous)

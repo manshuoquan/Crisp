@@ -21,7 +21,9 @@ target_include_directories(crisp_qt_bridge PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../event>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
-target_link_libraries(crisp_qt_bridge PUBLIC crisp::event Qt6::Core)
+# Qt6::Gui: the M4 typed translators touch QMouseEvent/QKeyEvent (QtGui
+# module, 06 §7). Qt6::Core alone no longer suffices.
+target_link_libraries(crisp_qt_bridge PUBLIC crisp::event Qt6::Core Qt6::Gui)
 
 target_compile_features(crisp_qt_bridge PUBLIC cxx_std_17)
 

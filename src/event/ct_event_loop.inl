@@ -1,4 +1,4 @@
-﻿// ct_event_loop.inl — template definitions for CtEventLoop.
+// ct_event_loop.inl — template definitions for CtEventLoop.
 //
 // Included at the bottom of ct_event_loop.h. Template methods only
 // (setDispatcher, injectEvent); the non-template machinery (exec, quit,

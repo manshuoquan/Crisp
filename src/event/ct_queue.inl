@@ -1,4 +1,4 @@
-﻿// ct_queue.inl — template definitions for CtQueue<EventSet>.
+// ct_queue.inl — template definitions for CtQueue<EventSet>.
 //
 // Included at the bottom of ct_queue.h. The header/.inl split keeps the
 // declarations readable; the template machinery lives here (language
@@ -45,8 +45,12 @@ bool CtQueue<EventSet>::push(const std::weak_ptr<CtReceiver>& target,
 
     if (m_events.size() >= kMaxQueued) {
         // Overflow (Rev 12, P3 ruling): drop the TAIL — lowest priority,
-        // oldest among equals. The dropped event is counted; the affinity
-        // thread reports it via popDropped() (records kDropped there).
+        // and among equals the one with the LARGEST sequence (the deque is
+        // ordered high-priority-first, equal priority by ascending
+        // sequence, so the tail is the newest among equals — audit WARN
+        // fix: the old comment said "oldest", which contradicted the
+        // ordering). The dropped event is counted; the affinity thread
+        // reports it via popDropped() (records kDropped there).
         ++m_dropped;
         m_events.pop_back();
     }
@@ -127,24 +131,38 @@ bool CtQueue<EventSet>::front(CtPendingEventBase*& out) {
     out = &m_events.front();
 
     // §7.10 contract #6: kQueued recorded HERE (the queue is the record body;
-    // affinity thread, no data race). typeName placeholder "<async>" — the
-    // pending base carries only the numeric payloadTypeKey; a human-readable
-    // name needs a variant visit (M4, §7.10 contract #6).
+    // affinity thread, no data race). Records the REAL payload name via the
+    // pending event's typeName() (M4, 04 Rev 10 P3-2) instead of the old
+    // "<async>" placeholder.
     CtDispatchContext ctx;
     ctx.m_phase = CtTracePhase::kQueued;
-    m_trace.record("<async>", CtTracePhase::kQueued, ctx, 0);
+    m_trace.record(out->typeName(), CtTracePhase::kQueued, ctx, 0);
     return true;
 }
 
 template <typename EventSet>
-void CtQueue<EventSet>::popFront() {
+void CtQueue<EventSet>::popFront(CtPendingEventBase* which) {
     if (!m_affinity.isOnThread()) {
         assert(false && "CtQueue::popFront on non-affinity thread");
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_events.empty())
-        m_events.pop_front();
+    if (!which)
+        return;
+    // Remove BY IDENTITY (address), not position: between front() and here a
+    // cross-thread push may have inserted a higher-priority element ahead of
+    // the dispatched one (deque reference/pointer stability is a standard
+    // guarantee for non-erased elements). Linear scan is O(n) but drain is
+    // NOT the sync hot path; n ≤ kMaxQueued.
+    for (auto it = m_events.begin(); it != m_events.end(); ++it) {
+        if (std::addressof(*it) == which) {
+            m_events.erase(it);
+            return;
+        }
+    }
+    // Element not found: the drain loop's front() was already invalidated
+    // (e.g. a concurrent popFront on the wrong thread — a contract
+    // violation). Nothing to remove.
 }
 
 template <typename EventSet>
@@ -175,6 +193,11 @@ std::size_t CtQueue<EventSet>::popDropped() {
     m_dropped = 0;
     if (dropped > 0) {
         // §7.10 contract #6: kDropped recorded here (affinity thread).
+        // Overflow drops carry only a COUNT — no concrete event object
+        // survives (the tail was erased at push time), so typeName() is
+        // unavailable; the "<async>" placeholder is intentional (audit
+        // WARN: documented trade-off, M4 typeName covers front()/dispatchAny
+        // drops which DO have the object).
         CtDispatchContext ctx;
         ctx.m_phase = CtTracePhase::kDropped;
         m_trace.record("<async>", CtTracePhase::kDropped, ctx, 0);

@@ -1,11 +1,11 @@
 # ---------------------------------------------------------------------------
-# M3 Qt bridge tests (hand-written test doubles, NO mock framework)
+# M3/M4 Qt bridge tests (hand-written test doubles, NO mock framework)
 #
 # Built only when Qt6 was found (guarded by the top-level CMakeLists.txt).
 # The bridge test executables need Qt6Core.dll on the PATH at runtime
 # (D:\Qt\6.2.4\bin) — see docs/event-system/05-qt-bridge.md §5.2 contract #5.
 # ---------------------------------------------------------------------------
-find_package(Qt6 COMPONENTS Core Widgets QUIET)
+find_package(Qt6 COMPONENTS Core Gui Widgets QUIET)
 
 add_executable(qt_bridge_tests
     main.cpp

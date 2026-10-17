@@ -23,8 +23,9 @@ bool postToQt(QObject* receiver, std::unique_ptr<QEvent> event,
 bool postToQt(QObject* receiver, QEvent::Type type, int priority) {
     if (receiver == nullptr)
         return false;
-    return postToQt(receiver, std::unique_ptr<QEvent>(new QEvent(type)),
-                    priority);
+    // No raw new (audit SUGGEST fix): make_unique + transfer to postToQt,
+    // which releases ownership into Qt's queue.
+    return postToQt(receiver, std::make_unique<QEvent>(type), priority);
 }
 
 } // namespace crisp::event

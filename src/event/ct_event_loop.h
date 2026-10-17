@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // CtEventLoop: per-thread event loop (M2 async core).
 //

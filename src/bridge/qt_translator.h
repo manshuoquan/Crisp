@@ -1,22 +1,31 @@
 #pragma once
 
 // qt_translator.h — runtime mapping table: QEvent::Type -> CRISP payload
-// (M3, §3.3).
+// (M3, §3.3; M4 typed translation, 06-m4-typed-translation.md).
 //
 // Part of the CRISP project. Type-safety principle (AGENTS.md #1): the int
 // enumeration QEvent::Type is confined to the bridge layer — the ONLY
-// sanctioned place that sees it. CRISP handlers always face the strong-typed
-// CtEvent<CtQtEventPayload>; the mapping table lives inside
-// CtQtEventSource (a controlled single point), never in dispatcher/queue/
-// handler code.
+// sanctioned place that sees it. CRISP handlers always face strong-typed
+// CtEvent<T>; the mapping table lives inside CtQtEventSource (a controlled
+// single point), never in dispatcher/queue/handler code.
+//
+// (M4) The translation product is CtQtTypedPayload — a CLOSED three-member
+// variant (CtQtEventPayload / CtMousePayload / CtKeyPayload). The M3
+// identity path (raw QEvent -> CtQtEventPayload) remains a member, so
+// unregistered-but-bridgeable types still fall back to identity (§3.3
+// contract #4); mouse/key types registered by installDefaults go through
+// the typed translators (§5.1/§5.2 of 06).
 
 #include <QEvent>
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "qt_event_payload.h"
+#include "qt_mouse_payload.h"
+#include "qt_key_payload.h"
 
 namespace crisp::event {
 
@@ -24,14 +33,21 @@ namespace crisp::event {
 /// confined to the bridge layer (the only sanctioned place that sees it).
 using CtQtTypeKey = int;
 
+/// (M4) Typed translation product: one of the bridge's typed payloads.
+/// The M3 identity path (raw QEvent -> CtQtEventPayload) remains a member.
+/// CLOSED variant: application-defined payloads cannot pass through the
+/// default translators (06 §8 #3 — out of M4 scope).
+using CtQtTypedPayload =
+    std::variant<CtQtEventPayload, CtMousePayload, CtKeyPayload>;
+
 /// Callback: build a CRISP payload from an owned Qt event.
-/// The return type is FIXED to CtQtEventPayload (§3.3 contract #1 — M3
-/// simplification: translation products are uniformly CtQtEventPayload;
-/// multi-type passthrough is deferred to M4). `spontaneous` marks Qt
+/// (M4) Return type changed from the fixed CtQtEventPayload to the typed
+/// variant — the source's translateAndPush std::visits it and pushes the
+/// STRONG-TYPED CtEvent<T> per branch (06 §3.3). `spontaneous` marks Qt
 /// spontaneous events (QEvent::spontaneous()) as CtEventOrigin::kSystem
 /// (mapped by the source's poll, §3.3 contract #3).
-using CtQtTranslator =
-    std::function<CtQtEventPayload(std::unique_ptr<QEvent>, bool spontaneous)>;
+using CtQtTranslator = std::function<CtQtTypedPayload(
+    std::unique_ptr<QEvent>, bool spontaneous)>;
 
 /// The bridge's type-safe mapping table: Qt type id -> translator.
 /// Implemented in qt_translator.cpp; hot path = one unordered_map lookup

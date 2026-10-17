@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // CtEventSource: abstract platform event source (M2 async core).
 //

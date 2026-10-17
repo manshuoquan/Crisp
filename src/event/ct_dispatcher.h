@@ -299,10 +299,12 @@ private:
                       const CtEvent<T>& event, uint64_t receiverId);
 
     /// Run the filters; returns kFiltered on interception (or kNone to
-    /// continue to handlers, §8.1 Step 5).
+    /// continue to handlers, §8.1 Step 5). Event is NON-const: filters may
+    /// accept/ignore (audit WARN fix: a const param + const_cast was both
+    /// redundant and a latent UB trap for a future const caller).
     template <typename T>
     CtDispatchResult runFilters(const detail::CtDispatchTables* tables,
-                                const CtEvent<T>& event, uint64_t receiverId);
+                                CtEvent<T>& event, uint64_t receiverId);
 
     /// Deliver to one matching receiver's handler(s) (send, §8.1 Step 6).
     template <typename T>

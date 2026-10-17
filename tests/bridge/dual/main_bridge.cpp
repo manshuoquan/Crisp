@@ -1,11 +1,13 @@
-// main_bridge.cpp — dual-run verification, CRISP+BRIDGE backend (M3, §6.1).
+// main_bridge.cpp — dual-run verification, CRISP+BRIDGE backend (M3, §6.1;
+// M4 typed translation, 06 §1.3).
 //
 // Part of the CRISP project. Uses the SAME CtDualModel and the SAME driving
 // sequence as main_qt.cpp, but the widget is a DUMB receiver (no overridden
 // handlers): every Qt event is captured by the bridge, translated into a
-// CtEvent<CtQtEventPayload>, injected into the CRISP queue, and delivered to
-// a CRISP handler that feeds the model. The log() output must be byte-
-// identical to the pure-Qt backend (§6.2/§6.3).
+// strong-typed CRISP payload (CtMousePayload / CtKeyPayload — M4 — or the
+// identity CtQtEventPayload for the Timer), injected into the CRISP queue,
+// and delivered to CRISP handlers that feed the model. The log() output
+// must be byte-identical to the pure-Qt backend (§6.2/§6.3).
 //
 // Loop model (§2.4): CtEventLoop::exec() is the single event-loop driver.
 // The bridge source's poll() pumps QCoreApplication::processEvents() and
@@ -22,7 +24,6 @@
 #include <QMouseEvent>
 #include <QObject>
 #include <QTimerEvent>
-#include <QtGlobal>  // qRound
 
 #include <cstdio>
 #include <fstream>
@@ -32,6 +33,8 @@
 #include "bridge/qt_event_set.h"
 #include "bridge/qt_event_source.h"
 #include "bridge/qt_event_payload.h"
+#include "bridge/qt_mouse_payload.h"
+#include "bridge/qt_key_payload.h"
 
 namespace {
 using namespace crisp::event;
@@ -39,34 +42,33 @@ using namespace crisp::event;
 using BridgeSet = CtQtEventSet;
 using BridgeDispatcher = CtDispatcher<BridgeSet>;
 
-/// CRISP receiver: converts the raw Qt payload into model calls.
+/// CRISP receiver: converts the M4 typed payloads into model calls
+/// (06 §1.3 — migrated from the single raw CtQtEventPayload handler).
 class CtDualReceiver : public CtReceiver {
 public:
     explicit CtDualReceiver(CtDualModel& model, CtEventLoop& loop)
         : m_model(model), m_loop(loop) {}
 
+    /// Typed mouse handler (M4): CtMousePayload carries x/y directly.
+    void handleMouse(CtEvent<CtMousePayload>& ev) {
+        const CtMousePayload& p = ev.payload();
+        m_model.onMouseMove(p.x, p.y);
+    }
+
+    /// Typed key handler (M4): CtKeyPayload carries Qt::Key directly.
+    void handleKey(CtEvent<CtKeyPayload>& ev) {
+        m_model.onKeyPress(static_cast<int>(ev.payload().key));
+    }
+
+    /// Raw Qt payload handler: ONLY the Timer event remains on the identity
+    /// path (Timer -> CtQtEventPayload, M3 §3.3 contract #4).
     void handleQtEvent(CtEvent<CtQtEventPayload>& ev) {
         QEvent* qe = ev.payload().event();
         if (qe == nullptr)
             return;
-        switch (qe->type()) {
-        case QEvent::MouseMove: {
-            auto* me = static_cast<QMouseEvent*>(qe);
-            const QPointF pos = me->position();
-            m_model.onMouseMove(qRound(pos.x()), qRound(pos.y()));
-            break;
-        }
-        case QEvent::KeyPress: {
-            auto* ke = static_cast<QKeyEvent*>(qe);
-            m_model.onKeyPress(ke->key());
-            break;
-        }
-        case QEvent::Timer:
+        if (qe->type() == QEvent::Timer) {
             m_model.onTimeout();
             m_loop.quit();  // terminate exec() after the timeout event
-            break;
-        default:
-            break;
         }
     }
 
@@ -101,14 +103,24 @@ int main(int argc, char** argv) {
     loop.attachToCurrentThread();
 
     auto receiver = createReceiver<CtDualReceiver>(model, loop);
-    // KEEP the token alive: CtHandlerToken's destructor UNREGISTERS the
+    // KEEP the tokens alive: CtHandlerToken's destructor UNREGISTERS the
     // handler (RAII, §7.7) — discarding the return value would silently
     // remove the handler before the loop runs, and no event would ever be
     // delivered (drain would drop them as kNoReceiver).
-    auto handlerToken = receiver->bindHandler<BridgeSet, CtQtEventPayload>(
+    // (M4) Three typed handlers: mouse/key via the typed payloads, the
+    // timeout via the identity path (06 §1.3).
+    auto mouseToken = receiver->bindHandler<BridgeSet, CtMousePayload>(
+        dispatcher,
+        [receiver](CtEvent<CtMousePayload>& ev) { receiver->handleMouse(ev); },
+        "dual-mouse");
+    auto keyToken = receiver->bindHandler<BridgeSet, CtKeyPayload>(
+        dispatcher,
+        [receiver](CtEvent<CtKeyPayload>& ev) { receiver->handleKey(ev); },
+        "dual-key");
+    auto rawToken = receiver->bindHandler<BridgeSet, CtQtEventPayload>(
         dispatcher,
         [receiver](CtEvent<CtQtEventPayload>& ev) { receiver->handleQtEvent(ev); },
-        "dual");
+        "dual-raw");
 
     auto source = std::make_shared<CtQtEventSource<BridgeSet>>(loop);
     loop.attachSource(source);

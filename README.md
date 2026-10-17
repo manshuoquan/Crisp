@@ -1,7 +1,7 @@
 # CRISP
 
 > 用现代 C++（C++17）逐步替代 Qt 模块的自研 GUI/应用框架。
-> 当前阶段：**事件系统**（M1 同步核心 + M2 异步核心 已完成）。
+> 当前阶段：**事件系统**（M1 同步核心 + M2 异步核心 已完成，M3 Qt 桥 进行中）。
 
 ---
 
@@ -54,11 +54,13 @@ cmake --build build --parallel 2
 
 ```powershell
 ctest --test-dir build --output-on-failure
-# 或直接运行
+# 或直接运行（event 核心测试）
 .\build\tests\event\event_tests.exe
+# 或直接运行（Qt 桥测试，需 Qt6 已配置）
+.\build\tests\bridge\bridge_tests.exe
 ```
 
-当前 36 个用例全部通过（M1 §13.1/§13.2 + M2 §13.3）。
+当前 M1/M2 事件核心 36 个用例全部通过；M3 Qt 桥另有 30+ 用例（translator / event source / payload），随 Qt6 可用性编译。
 
 ### 3.4 运行示例
 
@@ -133,7 +135,7 @@ Qt 事件系统（`QEvent` + `QCoreApplication::notify`）的痛点（详见 `do
 | M0 | 架构 + 接口规范定稿（`04-event-system-redesign.md`） | ✅ |
 | M1 | 同步核心：强类型事件、COW 分发器、无锁 trace | ✅ 36 测试全绿 |
 | M2 | 异步核心：队列、事件循环、事件源、post/postTo | ✅ 36 测试全绿 |
-| M3 | Qt 桥（可选）：`QtEventBridge` 适配器 + 双跑验证 | ⬜ 进行中 |
+| M3 | Qt 桥（可选）：`QtEventBridge` 适配器 + 双跑验证 | ✅ 代码完成，待文档同步 |
 | M4 | 加固：对象池、flat-map、`CtOpaqueEvent` 逃生舱 | ⬜ 未开始 |
 
 ## 5. 目录结构
@@ -145,11 +147,13 @@ crisp/
 ├── docs/
 │   ├── style-guide.md   # 风格细则
 │   ├── qt6-xml-ui-and-event-system.md  # Qt 调研
-│   └── event-system/    # 事件系统设计文档（01-04）
+│   └── event-system/    # 事件系统设计文档（01-06）
 ├── src/
-│   └── event/           # crisp::event 库源码
+│   ├── event/           # crisp::event 库源码（纯 C++17，无 Qt 依赖）
+│   └── bridge/          # M3 Qt 桥（仅 Qt6 存在时编译）
 ├── tests/
-│   └── event/           # 单元测试（手写 test double，无 mock）
+│   ├── event/           # 单元测试（手写 test double，无 mock）
+│   └── bridge/          # Qt 桥测试 + dual 双跑验证
 └── examples/
     └── event_demo/      # 演示程序
 ```

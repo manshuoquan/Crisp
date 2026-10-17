@@ -118,8 +118,11 @@ public:
 
     CtEvent(const CtEvent&) = default;
     CtEvent& operator=(const CtEvent&) = default;
-    CtEvent(CtEvent&&) noexcept = default;
-    CtEvent& operator=(CtEvent&&) noexcept = default;
+    // Conditional noexcept (audit SUGGEST fix): an unconditional noexcept
+    // move would std::terminate if the payload's move throws. Condition on
+    // the payload's move noexcept-ness.
+    CtEvent(CtEvent&&) noexcept(std::is_nothrow_move_constructible_v<T>) = default;
+    CtEvent& operator=(CtEvent&&) noexcept(std::is_nothrow_move_assignable_v<T>) = default;
 
     /// The strongly-typed payload (read-only view).
     const T& payload() const noexcept { return m_payload; }

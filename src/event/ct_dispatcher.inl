@@ -69,10 +69,15 @@ CtHandlerToken CtDispatcher<EventSet>::addHandler(
     tables->handlers[key].push_back(std::move(entry));
     ++tables->version;
 
+    // Create the token state BEFORE publish (audit WARN fix): if makeTokenState
+    // throws (vector growth bad_alloc), the registration is NOT yet visible —
+    // no orphaned registration without an owning token.
+    const std::shared_ptr<detail::CtTokenState> state = makeTokenState(id);
+
     std::lock_guard<std::mutex> lock(m_writeMutex);
     publish(std::move(tables));
 
-    return CtHandlerToken(makeTokenState(id));
+    return CtHandlerToken(state);
 }
 
 template <typename EventSet>
@@ -99,10 +104,13 @@ CtHandlerToken CtDispatcher<EventSet>::addFilter(CtFilter<T> filter,
     tables->filters[key].push_back(std::move(entry));
     ++tables->version;
 
+    // Token state BEFORE publish (audit WARN fix): no orphaned registration.
+    const std::shared_ptr<detail::CtTokenState> state = makeTokenState(id);
+
     std::lock_guard<std::mutex> lock(m_writeMutex);
     publish(std::move(tables));
 
-    return CtHandlerToken(makeTokenState(id));
+    return CtHandlerToken(state);
 }
 
 template <typename EventSet>
@@ -128,10 +136,13 @@ CtHandlerToken CtDispatcher<EventSet>::addObserver(CtObserver<T> observer,
     tables->observers[key].push_back(std::move(entry));
     ++tables->version;
 
+    // Token state BEFORE publish (audit WARN fix): no orphaned registration.
+    const std::shared_ptr<detail::CtTokenState> state = makeTokenState(id);
+
     std::lock_guard<std::mutex> lock(m_writeMutex);
     publish(std::move(tables));
 
-    return CtHandlerToken(makeTokenState(id));
+    return CtHandlerToken(state);
 }
 
 template <typename EventSet>
@@ -264,7 +275,9 @@ void CtDispatcher<EventSet>::dispatchAny(CtPendingEventBase& pending) {
     if (!pending.isBroadcast()) {
         target = pending.target().lock();
         if (!target) {
-            m_trace.record("<async>", CtTracePhase::kDropped,
+            // Records the REAL payload name (M4, 04 Rev 10 P3-2) instead of
+            // the old "<async>" placeholder.
+            m_trace.record(pending.typeName(), CtTracePhase::kDropped,
                            CtDispatchContext{}, 0);
             return;
         }
@@ -370,13 +383,21 @@ void CtDispatcher<EventSet>::runObservers(
     const auto it = tables->observers.find(CtTypeKey<T>::value());
     if (it == tables->observers.end())
         return;
+    // handlerCount = live handlers for THIS event type in the snapshot
+    // (audit WARN fix: tables->handlers.size() was the number of REGISTERED
+    // TYPES, not handlers — observable data was wrong).
+    const auto handlerIt = tables->handlers.find(CtTypeKey<T>::value());
+    const std::size_t handlerCount =
+        handlerIt == tables->handlers.end() ? 0 : handlerIt->second.size();
     for (const auto& observer : it->second) {
         CtDispatchContext ctx; // private ctor; CtDispatcher is a friend
         ctx.m_phase = CtTracePhase::kObserved;
         ctx.m_receiverId = receiverId;
         ctx.m_filterIndex = 0;
-        ctx.m_handlerCount = tables->handlers.size();
+        ctx.m_handlerCount = handlerCount;
+        const auto start = std::chrono::steady_clock::now();
         observer.fn(&event, ctx);
+        ctx.m_elapsed = std::chrono::steady_clock::now() - start;
         m_trace.record(CtEventTraits<T>::name, CtTracePhase::kObserved,
                        ctx, receiverId);
     }
@@ -385,7 +406,7 @@ void CtDispatcher<EventSet>::runObservers(
 template <typename EventSet>
 template <typename T>
 CtDispatchResult CtDispatcher<EventSet>::runFilters(
-    const detail::CtDispatchTables* tables, const CtEvent<T>& event,
+    const detail::CtDispatchTables* tables, CtEvent<T>& event,
     uint64_t receiverId) {
     const auto it = tables->filters.find(CtTypeKey<T>::value());
     if (it == tables->filters.end())
@@ -397,7 +418,10 @@ CtDispatchResult CtDispatcher<EventSet>::runFilters(
         ctx.m_phase = CtTracePhase::kFiltered;
         ctx.m_receiverId = receiverId;
         ctx.m_filterIndex = filterIndex;
-        if (filter.fn(const_cast<CtEvent<T>*>(&event))) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool intercepted = filter.fn(&event);
+        ctx.m_elapsed = std::chrono::steady_clock::now() - start;
+        if (intercepted) {
             m_trace.record(CtEventTraits<T>::name, CtTracePhase::kFiltered,
                            ctx, receiverId);
             return CtDispatchResult::kFiltered;
@@ -418,20 +442,22 @@ CtDispatchResult CtDispatcher<EventSet>::runDirectedHandlers(
     if (it == tables->handlers.end())
         return CtDispatchResult::kUnhandled;
 
-    bool anyMatched = false;
     for (const auto& entry : it->second) {
         auto target = entry.receiver.lock();
         if (!target || target->objectId() != receiver->objectId())
             continue; // expired or different receiver: skip
-        anyMatched = true;
+        CtDispatchContext ctx; // private ctor; CtDispatcher is a friend
+        ctx.m_phase = CtTracePhase::kDelivered;
+        ctx.m_receiverId = target->objectId();
+        const auto start = std::chrono::steady_clock::now();
         entry.fn(&event);
+        ctx.m_elapsed = std::chrono::steady_clock::now() - start;
         m_trace.record(CtEventTraits<T>::name, CtTracePhase::kDelivered,
-                       CtDispatchContext{}, target->objectId());
+                       ctx, target->objectId());
         if (event.accepted)
             return CtDispatchResult::kHandled; // first accept stops (§8.1)
     }
-    return anyMatched ? CtDispatchResult::kUnhandled
-                      : CtDispatchResult::kUnhandled;
+    return CtDispatchResult::kUnhandled; // no accept: matched or not (§8.1)
 }
 
 template <typename EventSet>
@@ -450,9 +476,14 @@ CtDispatchResult CtDispatcher<EventSet>::runBroadcastHandlers(
         const bool isBroadcastEntry = detail::isEmptyWeak(entry.receiver);
         if (isBroadcastEntry) {
             anyCalled = true;
+            CtDispatchContext ctx; // private ctor; CtDispatcher is a friend
+            ctx.m_phase = CtTracePhase::kDelivered;
+            ctx.m_receiverId = 0;
+            const auto start = std::chrono::steady_clock::now();
             entry.fn(&event);
+            ctx.m_elapsed = std::chrono::steady_clock::now() - start;
             m_trace.record(CtEventTraits<T>::name, CtTracePhase::kDelivered,
-                           CtDispatchContext{}, 0);
+                           ctx, 0);
             anyAccepted = anyAccepted || event.accepted;
             continue;
         }
@@ -460,9 +491,14 @@ CtDispatchResult CtDispatcher<EventSet>::runBroadcastHandlers(
         if (!target)
             continue; // expired receiver: skip, keep going (§8.2)
         anyCalled = true;
+        CtDispatchContext ctx; // private ctor; CtDispatcher is a friend
+        ctx.m_phase = CtTracePhase::kDelivered;
+        ctx.m_receiverId = target->objectId();
+        const auto start = std::chrono::steady_clock::now();
         entry.fn(&event);
+        ctx.m_elapsed = std::chrono::steady_clock::now() - start;
         m_trace.record(CtEventTraits<T>::name, CtTracePhase::kDelivered,
-                       CtDispatchContext{}, target->objectId());
+                       ctx, target->objectId());
         anyAccepted = anyAccepted || event.accepted;
     }
 

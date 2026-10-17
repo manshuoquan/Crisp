@@ -1,13 +1,18 @@
-// Unit tests for CtQtTranslatorTable + kIgnoredQtEvents (M3, §7.1/§7.2).
+// Unit tests for CtQtTranslatorTable + kIgnoredQtEvents (M3, §7.1/§7.2)
+// + M4 typed translation (06-m4-typed-translation.md §6.1).
 //
 // Part of the CRISP project. Covers register/find semantics, installDefaults,
-// the ignored-type boundary, and the spontaneous() origin mapping. Hand-
-// written test doubles only (NO mock framework).
+// the ignored-type boundary, the spontaneous() origin mapping, and the M4
+// typed mouse/key translators (T1–T2a). Hand-written test doubles only
+// (NO mock framework).
 
 #include "bridge/qt_translator.h"
 #include "bridge/qt_event_payload.h"
+#include "bridge/qt_mouse_payload.h"
+#include "bridge/qt_key_payload.h"
 
 #include <QEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QTimerEvent>
 
@@ -15,6 +20,110 @@
 
 namespace {
 using namespace crisp::event;
+
+// --- M4 typed mouse translation (§6.1 T1/T1a/T1b) ----------------------------
+
+TEST_CASE(qt_translator_mouse_move_maps_to_mouse_payload)
+{
+    CtQtTranslatorTable table;
+    CtQtTranslatorTable::installDefaults(table);
+
+    const CtQtTranslator* mouse = table.find(QEvent::MouseMove);
+    EXPECT_TRUE(mouse != nullptr);  // installed by installDefaults
+
+    QMouseEvent src(QEvent::MouseMove, QPoint(10, 20), QPoint(10, 20),
+                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    auto payload = (*mouse)(std::unique_ptr<QEvent>(src.clone()), false);
+    auto* typed = std::get_if<CtMousePayload>(&payload);
+    EXPECT_TRUE(typed != nullptr);
+    if (typed) {
+        EXPECT_EQ(typed->action, CtMouseAction::kMove);
+        EXPECT_EQ(typed->x, 10);
+        EXPECT_EQ(typed->y, 20);
+        EXPECT_EQ(typed->button, Qt::NoButton);
+        EXPECT_EQ(typed->modifiers, Qt::NoModifier);
+    }
+}
+
+TEST_CASE(qt_translator_mouse_press_maps_action_and_button)
+{
+    CtQtTranslatorTable table;
+    CtQtTranslatorTable::installDefaults(table);
+
+    const CtQtTranslator* mouse = table.find(QEvent::MouseButtonPress);
+    EXPECT_TRUE(mouse != nullptr);
+
+    QMouseEvent src(QEvent::MouseButtonPress, QPoint(5, 5), QPoint(5, 5),
+                    Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+    auto payload = (*mouse)(std::unique_ptr<QEvent>(src.clone()), false);
+    auto* typed = std::get_if<CtMousePayload>(&payload);
+    EXPECT_TRUE(typed != nullptr);
+    if (typed) {
+        EXPECT_EQ(typed->action, CtMouseAction::kPress);
+        EXPECT_EQ(typed->button, Qt::LeftButton);
+        EXPECT_EQ(typed->buttons, Qt::MouseButtons(Qt::LeftButton));
+        EXPECT_EQ(typed->modifiers, Qt::KeyboardModifiers(Qt::ShiftModifier));
+    }
+}
+
+TEST_CASE(qt_translator_mouse_dbl_click_maps_action)
+{
+    CtQtTranslatorTable table;
+    CtQtTranslatorTable::installDefaults(table);
+
+    const CtQtTranslator* mouse = table.find(QEvent::MouseButtonDblClick);
+    EXPECT_TRUE(mouse != nullptr);
+
+    QMouseEvent src(QEvent::MouseButtonDblClick, QPoint(7, 7), QPoint(7, 7),
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    auto payload = (*mouse)(std::unique_ptr<QEvent>(src.clone()), false);
+    auto* typed = std::get_if<CtMousePayload>(&payload);
+    EXPECT_TRUE(typed != nullptr);
+    if (typed) {
+        EXPECT_EQ(typed->action, CtMouseAction::kDblClick);
+    }
+}
+
+// --- M4 typed key translation (§6.1 T2/T2a) ---------------------------------
+
+TEST_CASE(qt_translator_key_press_maps_to_key_payload)
+{
+    CtQtTranslatorTable table;
+    CtQtTranslatorTable::installDefaults(table);
+
+    const CtQtTranslator* key = table.find(QEvent::KeyPress);
+    EXPECT_TRUE(key != nullptr);  // installed by installDefaults
+
+    QKeyEvent src(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, "a");
+    auto payload = (*key)(std::unique_ptr<QEvent>(src.clone()), false);
+    auto* typed = std::get_if<CtKeyPayload>(&payload);
+    EXPECT_TRUE(typed != nullptr);
+    if (typed) {
+        EXPECT_EQ(typed->action, CtKeyAction::kPress);
+        EXPECT_EQ(typed->key, Qt::Key_A);
+        EXPECT_EQ(typed->text, QString("a"));
+        EXPECT_EQ(typed->modifiers, Qt::NoModifier);
+        EXPECT_EQ(typed->isAutoRepeat, false);
+    }
+}
+
+TEST_CASE(qt_translator_key_release_maps_action)
+{
+    CtQtTranslatorTable table;
+    CtQtTranslatorTable::installDefaults(table);
+
+    const CtQtTranslator* key = table.find(QEvent::KeyRelease);
+    EXPECT_TRUE(key != nullptr);
+
+    QKeyEvent src(QEvent::KeyRelease, Qt::Key_B, Qt::NoModifier, "b");
+    auto payload = (*key)(std::unique_ptr<QEvent>(src.clone()), false);
+    auto* typed = std::get_if<CtKeyPayload>(&payload);
+    EXPECT_TRUE(typed != nullptr);
+    if (typed) {
+        EXPECT_EQ(typed->action, CtKeyAction::kRelease);
+        EXPECT_EQ(typed->key, Qt::Key_B);
+    }
+}
 
 // --- §7.1 #3: translator table semantics ------------------------------------
 
@@ -68,10 +177,16 @@ TEST_CASE(qt_translator_identity_mapping_preserves_event)
     const CtQtTranslator* timer = table.find(QEvent::Timer);
     EXPECT_TRUE(timer != nullptr);
 
+    // (M4) The translator now returns CtQtTypedPayload (variant); the
+    // identity path produces the CtQtEventPayload member (§1.3 修法).
     QTimerEvent src(7);
     auto payload = (*timer)(std::unique_ptr<QEvent>(src.clone()), true);
-    EXPECT_TRUE(payload.hasEvent());
-    EXPECT_EQ(payload.qtType(), static_cast<int>(QEvent::Timer));
+    auto* qev = std::get_if<CtQtEventPayload>(&payload);
+    EXPECT_TRUE(qev != nullptr);
+    if (qev) {
+        EXPECT_TRUE(qev->hasEvent());
+        EXPECT_EQ(qev->qtType(), static_cast<int>(QEvent::Timer));
+    }
 }
 
 // --- §7.1 #4: spontaneous() -> origin mapping ---------------------------------
@@ -89,8 +204,12 @@ TEST_CASE(qt_translator_identity_fallback_bridges_user_plus)
 
     QEvent custom(static_cast<QEvent::Type>(QEvent::User + 500));
     auto payload = (*identity)(std::unique_ptr<QEvent>(custom.clone()), false);
-    EXPECT_TRUE(payload.hasEvent());
-    EXPECT_EQ(payload.qtType(), static_cast<int>(QEvent::User + 500));
+    auto* qev = std::get_if<CtQtEventPayload>(&payload);
+    EXPECT_TRUE(qev != nullptr);
+    if (qev) {
+        EXPECT_TRUE(qev->hasEvent());
+        EXPECT_EQ(qev->qtType(), static_cast<int>(QEvent::User + 500));
+    }
 }
 
 TEST_CASE(qt_translator_spontaneous_maps_to_system_origin)
@@ -111,17 +230,25 @@ TEST_CASE(qt_translator_spontaneous_maps_to_system_origin)
 
     QEvent synthetic(QEvent::User);
     auto payload = (*user)(std::unique_ptr<QEvent>(synthetic.clone()), true);
-    EXPECT_TRUE(payload.hasEvent());
-    EXPECT_EQ(payload.qtType(), static_cast<int>(QEvent::User));
+    auto* qev = std::get_if<CtQtEventPayload>(&payload);
+    EXPECT_TRUE(qev != nullptr);
+    if (qev) {
+        EXPECT_TRUE(qev->hasEvent());
+        EXPECT_EQ(qev->qtType(), static_cast<int>(QEvent::User));
+    }
 
     // Flag pass-through: a translator returning the flag verbatim.
     auto flagTranslator = [](std::unique_ptr<QEvent> ev, bool) {
-        return CtQtEventPayload(std::move(ev));
+        return CtQtTypedPayload(CtQtEventPayload(std::move(ev)));
     };
     QEvent src(static_cast<QEvent::Type>(QEvent::User + 1));
     auto p2 = flagTranslator(std::unique_ptr<QEvent>(src.clone()), true);
-    EXPECT_TRUE(p2.hasEvent());
-    EXPECT_EQ(p2.qtType(), static_cast<int>(QEvent::User + 1));
+    auto* qev2 = std::get_if<CtQtEventPayload>(&p2);
+    EXPECT_TRUE(qev2 != nullptr);
+    if (qev2) {
+        EXPECT_TRUE(qev2->hasEvent());
+        EXPECT_EQ(qev2->qtType(), static_cast<int>(QEvent::User + 1));
+    }
 }
 
 // --- kIgnoredQtEvents boundary (§3.4a #5) -------------------------------------

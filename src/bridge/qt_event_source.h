@@ -100,9 +100,20 @@ private:
 template <typename EventSet>
 class CtQtEventSource final : public CtEventSource {
 public:
+    // (M4 contract, 06 §4) The source's translateAndPush std::visits the
+    // three-member CtQtTypedPayload and pushes each branch strong-typed —
+    // the EventSet MUST contain all three (M3 required only
+    // CtQtEventPayload). Explicit static_asserts make the compile error
+    // direct (the std::visit instantiations would report it indirectly).
     static_assert(EventSet::template contains<CtQtEventPayload>,
                   "CtQtEventSource<EventSet> requires CtQtEventPayload in the "
                   "event set");
+    static_assert(EventSet::template contains<CtMousePayload>,
+                  "CtQtEventSource<EventSet> requires CtMousePayload in the "
+                  "event set (M4 typed translation, 06 §4)");
+    static_assert(EventSet::template contains<CtKeyPayload>,
+                  "CtQtEventSource<EventSet> requires CtKeyPayload in the "
+                  "event set (M4 typed translation, 06 §4)");
 
     /// Create with the loop whose queue this source injects into.
     /// Does NOT install the event filter yet (done by activate(), §3.4 契约 #6).
@@ -139,6 +150,16 @@ public:
         return m_capture.get();
     }
 
+    /// (Rev 3, gap close) Kind of the last source-side error
+    /// (kNone = no error since construction/reset). Set by the poll()
+    /// re-entry guard in a release build (§4.2 契约 #2).
+    CtEventErrorKind lastErrorKind() const noexcept { return m_lastErrorKind; }
+
+    /// (Rev 3, gap close) Number of source-side errors recorded since
+    /// construction (spec §7.4 #16's "release 断言错误计数"). Non-atomic:
+    /// affinity-thread-only (poll is single-threaded, §4.2 契约 #7).
+    std::uint64_t errorCount() const noexcept { return m_errorCount; }
+
 private:
     /// Translate one buffered event and push it into `queue`.
     /// Records kDropped (queue trace) when no translator is registered.
@@ -160,6 +181,13 @@ private:
     /// stack. Debug: assert(false) on re-entry. Release: record an error and
     /// skip the nested processEvents() call (§4.2 契约 #2 / §7.4 #16).
     bool m_inPoll = false;
+    /// (Rev 3, gap close) Source-side error observability: poll() re-entry
+    /// in a release build records kOther here (spec §4.2 契约 #2 — the
+    /// "record an error" leg the original implementation skipped; the
+    /// bridge cannot construct CtDispatchContext, so the error state lives
+    /// on the source itself). Non-atomic: poll() is affinity-thread-only.
+    CtEventErrorKind m_lastErrorKind = CtEventErrorKind::kNone;
+    std::uint64_t m_errorCount = 0;      ///< source errors since construction
     std::function<void()> m_quitHandler;  ///< invoked on captured Quit
 };
 
@@ -197,8 +225,14 @@ void CtQtEventSource<EventSet>::poll(CtQueueBase& queue) {
     if (m_inPoll) {
         assert(false && "CtQtEventSource::poll re-entered (nested "
                         "processEvents()/exec() inside a handler)");
-        // Release degrade: skip the body. (kOther error recording is a
-        // known design gap — CtDispatchContext is private; see report.)
+        // (Rev 3, gap close) Release degrade: record the kOther error per
+        // §4.2 契约 #2 (previously a silent skip — the spec's "record an
+        // error" leg was missing because CtDispatchContext is private and
+        // the source holds no queue-side error channel; the error state now
+        // lives on the source, observable via lastErrorKind()/errorCount()).
+        // Then skip the body: never pump, never enqueue, never drain.
+        m_lastErrorKind = CtEventErrorKind::kOther;
+        ++m_errorCount;
         return;
     }
     m_inPoll = true;
@@ -305,16 +339,25 @@ void CtQtEventSource<EventSet>::translateAndPush(
     }
 
     const bool spontaneous = ev->spontaneous();
-    CtQtEventPayload payload = (*translator)(std::move(ev), spontaneous);
+    CtQtTypedPayload payload = (*translator)(std::move(ev), spontaneous);
 
     // §3.3 contract #3: spontaneous() -> kSystem, else kApplication.
     const CtEventOrigin origin =
         spontaneous ? CtEventOrigin::kSystem : CtEventOrigin::kApplication;
 
-    CtEvent<CtQtEventPayload> event(origin, std::move(payload));
-    // Broadcast delivery (empty target), §8.2 semantics — bridge events go
-    // to every handler registered for the payload.
-    queue.push(std::weak_ptr<CtReceiver>{}, std::move(event));
+    // (M4) std::visit: construct the STRONG-TYPED CtEvent<P> per branch and
+    // push it (06 §3.3). P ∈ {CtQtEventPayload, CtMousePayload, CtKeyPayload}
+    // is guaranteed by the class static_asserts above. Broadcast delivery
+    // (empty target), §8.2 semantics — bridge events go to every handler
+    // registered for the payload. Zero heap allocation: the variant moves
+    // into CtEvent<P> by value (M3 unchanged).
+    std::visit(
+        [&](auto&& p) {
+            using P = std::decay_t<decltype(p)>;
+            queue.push(std::weak_ptr<CtReceiver>{},
+                       CtEvent<P>(origin, std::move(p)));
+        },
+        payload);
 }
 
 template <typename EventSet>
@@ -348,13 +391,12 @@ void detail::CtQtEventCapture<EventSet>::drain(CtQueue<EventSet>& queue) {
 }
 
 template <typename EventSet>
-bool detail::CtQtEventCapture<EventSet>::eventFilter(QObject* watched,
-                                                     QEvent* event) {
+bool detail::CtQtEventCapture<EventSet>::eventFilter(
+    [[maybe_unused]] QObject* watched, QEvent* event) {
     // §3.4a #1: no sink (source not constructed / destroying / direct test
     // use) -> do NOT capture. NEVER throws (Qt filters must not throw).
     if (m_sink == nullptr || event == nullptr)
         return false;
-    (void)watched;  // the bridge never holds QObject references (P2-4)
 
     const CtQtTypeKey qtType = static_cast<CtQtTypeKey>(event->type());
 

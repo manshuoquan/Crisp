@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // CtTimerEventSource / ManualEventSource: built-in platform event sources.
 //

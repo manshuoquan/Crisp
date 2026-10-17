@@ -1,4 +1,4 @@
-﻿// ct_queue.cpp — non-template async routing machinery (M2).
+// ct_queue.cpp — non-template async routing machinery (M2).
 //
 // Part of the CRISP event subsystem (crisp::event). Implements the
 // thread→queue lookup table (§10.1 contract #1/#7 routing): CtEventLoop

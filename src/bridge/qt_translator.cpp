@@ -1,13 +1,17 @@
 // qt_translator.cpp — translator table + kIgnoredQtEvents definitions.
 //
 // Part of the CRISP project, M3 Qt bridge (docs/event-system/05-qt-bridge.md
-// §3.3/§3.4a). Non-template bridge-layer logic lives here; the template
-// capture class (qt_event_source.h) calls the free helper
+// §3.3/§3.4a) + M4 typed translation (docs/event-system/06-m4-typed-
+// translation.md §5). Non-template bridge-layer logic lives here; the
+// template capture class (qt_event_source.h) calls the free helper
 // isIgnoredQtEvent() instead of duplicating the boundary decision
 // (P3 recommendation #2 — capture layer first checks the registry, then the
 // ignored list; both must agree, so the decision lives in ONE place).
 
 #include "qt_translator.h"
+
+#include <QKeyEvent>
+#include <QMouseEvent>
 
 #include <vector>
 
@@ -15,9 +19,54 @@ namespace crisp::event {
 
 namespace {
 
-/// Identity translator: wraps the owned event as-is (Timer/User+ default).
-CtQtEventPayload identityTranslate(std::unique_ptr<QEvent> event, bool) {
-    return CtQtEventPayload(std::move(event));
+/// Identity translator: wraps the owned event as-is into the CtQtEventPayload
+/// variant member (Timer/User+ default + M3-compatible fallback, §3.3
+/// contract #4). (M4) Return type changed to CtQtTypedPayload.
+CtQtTypedPayload identityTranslate(std::unique_ptr<QEvent> event, bool) {
+    return CtQtTypedPayload(CtQtEventPayload(std::move(event)));
+}
+
+/// QEvent::Type -> CtMouseAction. The ONLY place Qt mouse type ids map to
+/// the CRISP-native discriminant (06 §5.1). Qt guarantees the registered
+/// type matches the dynamic event class, so MouseButtonPress always arrives
+/// here as a QMouseEvent. (Qt 6 names: MouseButtonPress/Release, NOT the
+/// Qt 5 aliases MousePress/Release.)
+CtMouseAction mouseActionFor(QEvent::Type t) noexcept {
+    switch (t) {
+    case QEvent::MouseButtonPress:    return CtMouseAction::kPress;
+    case QEvent::MouseButtonRelease:  return CtMouseAction::kRelease;
+    case QEvent::MouseButtonDblClick: return CtMouseAction::kDblClick;
+    case QEvent::MouseMove:
+    default:                          return CtMouseAction::kMove;
+    }
+}
+
+/// (M4) Typed mouse translator: QMouseEvent -> CtMousePayload (§5.1).
+/// Defensive: a null/type-mismatched pointer falls back to the raw payload
+/// (never crashes; the kDropped/ignored paths are untouched, M3 semantics).
+CtQtTypedPayload mouseTranslate(std::unique_ptr<QEvent> ev, bool) {
+    auto* me = static_cast<QMouseEvent*>(ev.get());
+    if (me == nullptr)
+        return CtQtTypedPayload(CtQtEventPayload(std::move(ev)));
+    const QPointF pos = me->position();
+    return CtMousePayload{mouseActionFor(me->type()),
+                          static_cast<int>(pos.x()),
+                          static_cast<int>(pos.y()),
+                          me->button(), me->buttons(), me->modifiers()};
+}
+
+/// (M4) Typed key translator: QKeyEvent -> CtKeyPayload (§5.2).
+/// QKeyEvent::key() returns int; CtKeyPayload::key is Qt::Key — the explicit
+/// cast is the ONLY int->enum conversion (bridge boundary).
+CtQtTypedPayload keyTranslate(std::unique_ptr<QEvent> ev, bool) {
+    auto* ke = static_cast<QKeyEvent*>(ev.get());
+    if (ke == nullptr)
+        return CtQtTypedPayload(CtQtEventPayload(std::move(ev)));
+    const CtKeyAction action =
+        ke->type() == QEvent::KeyRelease ? CtKeyAction::kRelease
+                                         : CtKeyAction::kPress;
+    return CtKeyPayload{action, static_cast<Qt::Key>(ke->key()),
+                        ke->text(), ke->modifiers(), ke->isAutoRepeat()};
 }
 
 /// The FINAL ignored-type list (§3.4a #5): Qt-internal/synthetic events plus
@@ -88,6 +137,21 @@ void CtQtTranslatorTable::installDefaults(CtQtTranslatorTable& table) {
     // User slot AND the poll falls back to identity for any qtType >= User,
     // see qt_event_source.h §3.4 contract #4.)
     table.registerTranslator(QEvent::User, *identity);
+
+    // (M4) Typed mouse translation: MouseMove/ButtonPress/ButtonRelease/
+    // ButtonDblClick -> CtMousePayload (06 §5, table). Registered by type
+    // so the capture layer clones them and the drain produces the
+    // STRONG-TYPED payload. (Qt 6 enum names, §5.1.)
+    static const CtQtTranslator kMouse = &mouseTranslate;
+    table.registerTranslator(QEvent::MouseMove, kMouse);
+    table.registerTranslator(QEvent::MouseButtonPress, kMouse);
+    table.registerTranslator(QEvent::MouseButtonRelease, kMouse);
+    table.registerTranslator(QEvent::MouseButtonDblClick, kMouse);
+
+    // (M4) Typed key translation: KeyPress/KeyRelease -> CtKeyPayload.
+    static const CtQtTranslator kKey = &keyTranslate;
+    table.registerTranslator(QEvent::KeyPress, kKey);
+    table.registerTranslator(QEvent::KeyRelease, kKey);
 }
 
 const CtQtTranslator* CtQtTranslatorTable::identityTranslator() noexcept {

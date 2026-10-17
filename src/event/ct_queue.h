@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // CtQueue: per-thread, priority-aware async event queue (M2 async core).
 //
@@ -73,6 +73,13 @@ public:
     /// assert before it re-homes the variant into the pipeline).
     virtual uint64_t payloadTypeKey() const noexcept = 0;
 
+    /// Human-readable payload name (M4, 04 Rev 10 P3-2): the async trace
+    /// phases (kQueued/kDropped) record the REAL trait name instead of the
+    /// "<async>" placeholder. Implemented via std::visit over the concrete
+    /// variant (CtPendingEvent<EventSet>), so it needs the payload's
+    /// compile-time name — zero allocation, affinity thread.
+    virtual std::string_view typeName() const noexcept = 0;
+
     /// Pointer to the concrete CtAnyEvent (variant) inside the deque
     /// element. NON-const member function (Rev 12, P1-1): dispatchAny runs
     /// the §8.1 pipeline which resets accepted and passes a non-const
@@ -135,6 +142,18 @@ struct CtPendingEvent : CtPendingEventBase {
             m_payload);
     }
 
+    /// (M4) Human-readable payload name for async trace records (§7.10
+    /// contract #6): visits the variant and returns CtEventTraits<T>::name.
+    std::string_view typeName() const noexcept override {
+        return std::visit(
+            [](const auto& ev) {
+                using EventT = std::decay_t<decltype(ev)>;
+                using T = typename EventT::payload_type;
+                return CtEventTraits<T>::name;
+            },
+            m_payload);
+    }
+
     void* payloadPtr() noexcept override { return &m_payload; }
 
     any_event m_payload; ///< CtAnyEvent value (no heap)
@@ -162,8 +181,15 @@ public:
     virtual bool front(CtPendingEventBase*& out) = 0;
 
     /// Remove the front element (ONLY on the affinity thread; asserts).
-    /// No trace, no allocation.
-    virtual void popFront() = 0;
+    /// `which` must be the element previously returned by front() — the
+    /// removal is BY IDENTITY (address), not by position: between front()
+    /// and popFront() a cross-thread push may insert an element ahead of it
+    /// (priority insertion), so "remove the current head" would drop the
+    /// WRONG element and leave the dispatched one queued for a second
+    /// dispatch (audit MUST-1 fix). Deque guarantees references/pointers to
+    /// non-erased elements stay valid across push/erase, so `which` remains
+    /// valid until this call. No trace, no allocation.
+    virtual void popFront(CtPendingEventBase* which) = 0;
 
     /// Drain-and-drop report: number of events dropped since the last call
     /// (overflow at push time). Records kDropped in the queue's own trace
@@ -250,8 +276,11 @@ public:
     /// Peek front (affinity thread; records kQueued on success, §7.10 contract #6).
     bool front(CtPendingEventBase*& out) override;
 
-    /// Remove front (affinity thread; no trace).
-    void popFront() override;
+    /// Remove the element returned by front() — BY IDENTITY, not position
+    /// (audit MUST-1 fix: a cross-thread push between front() and here may
+    /// insert a higher-priority element ahead of it; positional pop would
+    /// drop the wrong event). Affinity thread only; no trace.
+    void popFront(CtPendingEventBase* which) override;
 
     /// Number of queued events (approximate; diagnostics).
     std::size_t size() const noexcept override;

@@ -1,4 +1,4 @@
-﻿// ct_event_loop.cpp — non-template CtEventLoop machinery (M2).
+// ct_event_loop.cpp — non-template CtEventLoop machinery (M2).
 //
 // Part of the CRISP event subsystem (crisp::event). §5.3: non-template
 // mechanisms live in .cpp files. The template entries (setDispatcher,
@@ -46,7 +46,14 @@ int CtEventLoop::exec() {
     m_quit.store(false, std::memory_order_relaxed);
 
     // Loop until quit() OR the queue is closed (destruction). The queue's
-    // waitForEvent blocks when empty; push/close wake it.
+    // waitForEvent blocks when empty; push/close wake it. Guard the queue
+    // pointer: exec() without setDispatcher() has no queue (drainOnce also
+    // guards via m_hasDispatcher) — assert + return 0 instead of UB.
+    if (!m_queue) {
+        assert(false && "CtEventLoop::exec: setDispatcher not called");
+        return 0;
+    }
+
     while (!m_quit.load(std::memory_order_relaxed) &&
            !m_queue->isClosed()) {
         // 1) Drain the queue (dispatch any pending events into the
@@ -127,9 +134,11 @@ std::size_t CtEventLoop::drainOnce() {
     // §7.11 contract #2 drain loop: front() records kQueued internally; the
     // dispatcher is ALWAYS called — even for expired targets (dispatchAny
     // decides: live → pipeline, expired → kDropped in the dispatcher trace).
+    // popFront(pe) removes BY IDENTITY so a cross-thread push between front
+    // and pop cannot evict the wrong element (audit MUST-1 fix).
     while (m_queue->front(pe)) {
         m_dispatcher->dispatchAny(*pe); // friend: CtEventLoop reaches protected
-        m_queue->popFront();
+        m_queue->popFront(pe);
         ++count;
     }
 
