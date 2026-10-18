@@ -4,7 +4,8 @@
 add_executable(thread_tests
     main.cpp
     test_ct_thread_pool.cpp
-    test_ct_future_bridge.cpp)
+    test_ct_future_bridge.cpp
+    test_ct_parallel.cpp)
 
 # Reuse the event test harness header (project rule: hand-written, no mock).
 target_include_directories(thread_tests PRIVATE

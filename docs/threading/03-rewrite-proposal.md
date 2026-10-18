@@ -195,8 +195,9 @@ sequenceDiagram
 ### 3.6 并行算法（MT3，对齐 QtConcurrent）
 
 - **结论**：MinGW 8.1 的 libstdc++ 不支持 `<execution>`（PSTL），Qt 也是自研分块（`qtconcurrentiteratekernel`），故自研分块调度，不依赖标准库并行设施。
-- `CtParallel::map(container, fn)` → 分块 + 每块一个任务投给 `CtThreadPool` → `CtFuture<CtResult<...>>`。
-- 迭代器分块要处理随机访问/前向迭代器两种形态（对齐 Qt 的 `qtconcurrentiteratekernel` 策略）。
+- `CtParallel::map(pool, first, last, fn)` → **阻塞同步**返回 `std::vector<Out>`（与 `std::for_each` 结果逐元素一致；设计草图的异步 `CtFuture` 形态不采用——同步语义满足 §4 验收且共享池更可测）。分块 + 每块一个任务投给 `CtThreadPool`；块结果按**块索引**装配（含 pool 拒绝的串行回退 park，保证确定性顺序）。
+- 迭代器分块要处理随机访问/前向迭代器两种形态（前向迭代器物化一份，对齐 Qt 的 `qtconcurrentiteratekernel` 策略）。
+- **API 形态定案（Rev 1）**：`map(pool, first, last, fn)` / `filter(pool, first, last, pred)` / `reduce(pool, first, last, init, op)`——显式传池（§3.5 共享池定位），阻塞等待全部块完成后返回；调用纪律：不得在池 worker 任务体内调用（会自死锁）。
 
 ---
 
@@ -207,7 +208,7 @@ sequenceDiagram
 | MT0 | 调研文档（01/02/03 本文） | 过架构审查门禁 |
 | MT1 | `CtThread` RAII + `CtThreadPool` + `CtTask<T>`（含侵入式队列 + 取消 + 任务轨迹 + `crisp::thread::CtTaskPhase` 独立枚举） | 单测：提交/优先级/取消（含"摘除 vs 执行"竞态用例）/shutdown/内嵌节点零分配（operator new 计数）/任务轨迹相位 kSubmitted→kRunning→kCompleted/kCancelled |
 | MT2 | `CtFuture<T>`（单结果 + 多结果存储双模式）+ 线程→事件回传桥（postTo 封装） | 单测：完成回调在目标线程执行；**跨线程违规调用在 release 下被拒绝（返回码/轨迹）**；无事件循环线程显式失败且轨迹有 kDropped；可取消；`resultAt(i)` 多结果 |
-| MT3 | `CtParallel::map/filter/reduce`（自研分块） | 单测：与 std::for_each 结果一致；分块正确性；按块索引取结果（对齐 Qt resultAt） |
+| MT3 | `CtParallel::map/filter/reduce`（自研分块，**阻塞同步**返回；块序装配含拒绝回退） | 单测：与 std::for_each 结果一致；分块正确性（块边界）；按块索引装配（内部，含 pool 拒绝路径保序）；非结合 op 确定性；异常传播 |
 | MT4 | work-stealing 队列 / `CtPromise<T>`（可选） | 性能对比 + 单测 |
 
 > **类型定义**：`CtResult<T>` = `std::variant<T, std::exception_ptr>`（任务结果 + 异常通道，对齐 `CtTask<T>` §3.2）；`CtTask<T>` 强类型，替代 `QRunnable` 的 void* 类型擦除（§3.2 表）。此二类型在 MT1 定义、MT2 由 `CtFuture<T>` 暴露给消费者。
