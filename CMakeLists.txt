@@ -23,6 +23,7 @@ add_compile_options(-Wall -Wextra)
 # Libraries
 # ---------------------------------------------------------------------------
 add_subdirectory(src/event)
+add_subdirectory(src/thread)
 
 # Qt bridge (M3/M4): built only when Qt6 is found. The bridge directory runs its
 # own find_package(Qt6 COMPONENTS Core Gui QUIET); the top-level guard keeps the
@@ -38,6 +39,7 @@ endif()
 # ---------------------------------------------------------------------------
 enable_testing()
 add_subdirectory(tests/event)
+add_subdirectory(tests/thread)
 if(Qt6_FOUND)
     add_subdirectory(tests/bridge)
 endif()
