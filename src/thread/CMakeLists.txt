@@ -7,6 +7,7 @@
 # ---------------------------------------------------------------------------
 add_library(crisp_thread STATIC
     ct_thread.cpp
+    ct_task_base.cpp
     ct_task_queue.cpp
     ct_thread_pool.cpp
     ct_thread_trace.cpp)

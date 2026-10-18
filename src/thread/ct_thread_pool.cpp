@@ -112,6 +112,14 @@ void CtThreadPool::workerLoop() {
             task->finishCancelled();
         else
             task->finishCompleted();
+        // Fire the completion notifier (MT2 bridge hook) — the bridge turns
+        // this into a postTo() to the target thread. CONTRACT (audit W2):
+        // fireCompletion MUST run AFTER the terminal store (finishCompleted/
+        // finishCancelled's release) so a notifier reading phase() via
+        // acquire-load sees the terminal state and, by the release/acquire
+        // pairing, all prior writes (including m_result). Do NOT reorder
+        // this call before the terminal store.
+        task->fireCompletion();
         // MUST-1: snapshot the record BEFORE releasing the task reference —
         // finishCompleted/finishCancelled notify the owner handle, which may
         // drop its reference and free the task right after.

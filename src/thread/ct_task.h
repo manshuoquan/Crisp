@@ -33,6 +33,13 @@ namespace crisp::thread {
 // Forward: CtTaskNode stores a base pointer + shared holder.
 class CtTaskBase;
 
+/// Completion notifier registered by the event bridge: invoked ONCE when the
+/// task reaches a terminal state (completed or cancelled), on the WORKER
+/// thread, right after the terminal store. The bridge wraps this in a
+/// postTo() to the target thread — the worker never calls user code directly
+/// (design §3.1 rule 1). MUST be cheap and non-blocking.
+using CtCompletionNotifier = std::function<void()>;
+
 /// Result of a CtTask: either the value T or the exception that escaped run().
 /// Strong-typed replacement for QRunnable's implicit member-field results.
 template <typename T>
@@ -103,8 +110,36 @@ public:
     /// terminal state — it falls back to join semantics).
     virtual bool tryCancelFromSubmitted() noexcept = 0;
 
+    /// Fire the completion notifier from the OWNER-CANCEL path (audit
+    /// MUST): after tryCancelFromSubmitted() succeeds, the worker will skip
+    /// the task (CAS fails) and NEVER call fireCompletion() — the owner must
+    /// fire it (and break the notifier's self-hold) instead, so a wired
+    /// future still receives its kCancelled done event and the
+    /// task->notifier->task shared_ptr cycle is released.
+    void fireCompletionFromOwnerCancel();
+
     virtual void finishCompleted() noexcept = 0;
     virtual void finishCancelled() noexcept = 0;
+
+    /// Register a completion notifier (MT2 bridge hook): invoked at most
+    /// once when the task reaches a terminal state. If the task is ALREADY
+    /// terminal when registered, the notifier fires IMMEDIATELY on the
+    /// calling thread; otherwise it fires on the worker thread (right after
+    /// the terminal store) — or on the OWNER-CANCEL thread when the task is
+    /// cancelled while still queued (audit MUST). The event bridge wraps
+    /// this in a postTo() to the target thread (design §3.1 rule 1: the
+    /// worker NEVER calls user code directly — it only posts).
+    /// Thread-safe (registration may race completion; at most one fire).
+    void setCompletionNotifier(CtCompletionNotifier notifier);
+
+    /// Fire the completion notifier (worker-side, after terminal store).
+    /// CONTRACT (audit W2): must be called AFTER finishCompleted()/
+    /// finishCancelled() — the terminal store's release establishes
+    /// happens-before with the notifier's phase() acquire-load, so the
+    /// notifier safely observes all prior writes (incl. m_result). Notifiers
+    /// are invoked exactly once; exceptions from a notifier are swallowed
+    /// (audit W3 — a throwing notifier must not kill the worker).
+    void fireCompletion();
 
     /// Submit timestamp (us, steady clock) — set by the pool on submit so
     /// the worker can compute queued latency (§3.4). Base-level storage.
@@ -112,6 +147,11 @@ public:
 
     /// Submitting thread OS id — set by the pool on submit for trace.
     crisp::event::CtThreadId submitThreadId = 0;
+
+protected:
+    std::mutex m_completionMutex;        ///< guards m_completion (once)
+    CtCompletionNotifier m_completion;   ///< bridge callback
+    bool m_completionFired = false;      ///< fired at most once
 };
 
 /// A cancellable unit of work with strong-typed result. Non-movable,

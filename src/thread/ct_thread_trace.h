@@ -23,6 +23,8 @@ enum class CtTaskPhase : uint8_t {
     kRunning   = 1, ///< picked up by a worker (CAS kSubmitted -> kRunning)
     kCompleted = 2, ///< run() returned without cancellation
     kCancelled = 3, ///< cancelled while queued, or cooperatively while running
+    kDropped   = 4, ///< terminal without execution: rejected (overflow) or
+                    ///< delivery failed (bridge postTo failure, §3.1 rule 3)
 };
 
 /// One task-side trace record (§3.4). Fields are filled by the submitting
@@ -32,7 +34,10 @@ struct CtTaskRecord {
     CtTaskPhase phase = CtTaskPhase::kSubmitted;
     std::uint64_t taskId = 0;        ///< globally unique task id
     crisp::event::CtThreadId submitThread = 0; ///< submitting thread
-    crisp::event::CtThreadId workerThread = 0; ///< executing worker (0 if queued)
+    crisp::event::CtThreadId workerThread = 0; ///< executing worker (0 if queued);
+                                    ///< OVERLOADED by the event bridge on
+                                    ///< delivery failure: the FAILED TARGET
+                                    ///< thread (kDropped record, §3.1 rule 3)
     std::uint64_t queuedLatencyUs = 0; ///< submit -> running latency (us)
     std::uint64_t runDurationUs = 0;   ///< running -> completed/cancelled (us)
     bool cancelByOwner = false;        ///< cancellation source (owner/other)

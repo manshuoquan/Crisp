@@ -96,6 +96,20 @@ public:
         return m_task ? m_task->phase() : CtTaskPhase::kSubmitted;
     }
 
+    /// True if the owned task reached a terminal state.
+    bool isDone() const noexcept {
+        return m_task ? m_task->isDone() : true;
+    }
+
+    /// True if cancellation was requested.
+    bool isCancelled() const noexcept {
+        return m_task ? m_task->cancelled() : false;
+    }
+
+    /// Access the owned task (bridge hook; CtFuture registers the completion
+    /// notifier through it). Internal use only.
+    const std::shared_ptr<CtTask<T>>& task() const noexcept { return m_task; }
+
     /// The task result. Valid only after waitForDone()/isDone().
     const CtResult<T>& result() const;
 
@@ -153,8 +167,8 @@ public:
     /// Submit a task that returns T. Returns a handle owning the task
     /// (cancellation + wait + result). Returns an INVALID handle (nullptr
     /// task) if the pool is not running or the queue is full (rejected;
-    /// recorded in the task trace as kCancelled with cancelByOwner=false —
-    /// see §3.5 overflow discipline).
+    /// recorded in the task trace as kDropped with cancelByOwner=false —
+    /// see §3.5 overflow discipline / CtTaskPhase enum).
     template <typename T, typename Fn>
     CtTaskHandle<T> submit(Fn&& fn, std::uint64_t priority = 0);
 
@@ -186,6 +200,10 @@ public:
     std::size_t copyTaskTrace(CtTaskRecord* out, std::size_t max) const {
         return m_trace.copyOut(out, max);
     }
+
+    /// Direct access to the task trace ring (bridge failure records, audit
+    /// W1: the bridge installs itself as a failure sink).
+    CtTaskTrace& taskTrace() noexcept { return m_trace; }
 
     /// Unlink a queued task (owner-handle destruction path, §3.2).
     /// Public: CtTaskHandle's destructor calls this via its pool pointer.
@@ -242,6 +260,11 @@ CtTaskHandle<T>::~CtTaskHandle() {
         // CAS kSubmitted -> kCancelled: succeeds only if the worker has NOT
         // yet started. On success, unlink from the queue (owner-side, §3.2).
         if (m_task->tryCancelFromSubmitted()) {
+            // Owner-cancel path: fire the notifier here (audit MUST — the
+            // worker will skip the task and never fire it), breaking the
+            // task->notifier->task cycle and delivering the kCancelled done
+            // event to any wired future.
+            m_task->fireCompletionFromOwnerCancel();
             if (m_pool) {
                 m_pool->unlinkQueued(m_task.get());
                 m_pool->recordOwnerCancellation(m_task.get());
@@ -289,6 +312,10 @@ void CtTaskHandle<T>::cancel() noexcept {
     // started it, the running task cooperatively observes the flag.
     if (m_task->phase() == CtTaskPhase::kSubmitted &&
         m_task->tryCancelFromSubmitted()) {
+        // Owner-cancel path: fire the notifier (audit MUST — worker skips
+        // the task, so this is the only chance to deliver kCancelled and
+        // break the task->notifier->task cycle).
+        m_task->fireCompletionFromOwnerCancel();
         if (m_pool) {
             m_pool->unlinkQueued(m_task.get());
             m_pool->recordOwnerCancellation(m_task.get());
@@ -332,8 +359,10 @@ CtTaskHandle<T> CtThreadPool::submit(Fn&& fn, std::uint64_t priority) {
     recordTaskTrace(task.get(), CtTaskPhase::kSubmitted,
                     crisp::event::currentThreadId(), 0, 0, false);
     if (!m_queue.push(task)) {
-        // Overflow/closed: reject (trace kCancelled, not owner-cancelled).
-        recordTaskTrace(task.get(), CtTaskPhase::kCancelled,
+        // Overflow/closed: reject — record kDropped (audit recheck WARN:
+        // kDropped covers "rejected (overflow)" per the enum comment, not
+        // kCancelled which implies owner/collaborative cancellation).
+        recordTaskTrace(task.get(), CtTaskPhase::kDropped,
                         crisp::event::currentThreadId(), 0, 0, false);
         return CtTaskHandle<T>{};
     }
@@ -355,7 +384,8 @@ CtTaskHandle<T> CtThreadPool::submit(Fn&& fn, std::uint64_t priority,
     recordTaskTrace(task.get(), CtTaskPhase::kSubmitted,
                     crisp::event::currentThreadId(), 0, 0, false);
     if (!m_queue.push(task)) {
-        recordTaskTrace(task.get(), CtTaskPhase::kCancelled,
+        // Overflow/closed: reject — kDropped (see first overload).
+        recordTaskTrace(task.get(), CtTaskPhase::kDropped,
                         crisp::event::currentThreadId(), 0, 0, false);
         return CtTaskHandle<T>{};
     }
