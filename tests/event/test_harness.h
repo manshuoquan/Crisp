@@ -100,3 +100,25 @@ struct CtTestRegistrar {
             ++::test::CtTestRegistry::g_assertFailures;                            \
         }                                                                          \
     } while (0)
+
+#define EXPECT_FALSE(cond) EXPECT_TRUE(!(cond))
+#define EXPECT_LE(a, b)                                                            \
+    do {                                                                           \
+        auto va = (a);                                                             \
+        auto vb = (b);                                                             \
+        if (!(va <= vb)) {                                                         \
+            std::printf("  EXPECT_LE failed at %s:%d: %s <= %s\n", __FILE__,       \
+                        __LINE__, #a, #b);                                         \
+            ++::test::CtTestRegistry::g_assertFailures;                            \
+        }                                                                          \
+    } while (0)
+#define EXPECT_GE(a, b)                                                            \
+    do {                                                                           \
+        auto va = (a);                                                             \
+        auto vb = (b);                                                             \
+        if (!(va >= vb)) {                                                         \
+            std::printf("  EXPECT_GE failed at %s:%d: %s >= %s\n", __FILE__,       \
+                        __LINE__, #a, #b);                                         \
+            ++::test::CtTestRegistry::g_assertFailures;                            \
+        }                                                                          \
+    } while (0)
