@@ -6,6 +6,7 @@ add_executable(event_tests
     test_allocation.cpp
     test_ct_event.cpp
     test_ct_dispatcher.cpp
+    test_ct_input.cpp
     test_ct_queue.cpp
     tu_a.cpp
     tu_b.cpp)
