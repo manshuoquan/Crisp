@@ -2,6 +2,7 @@
 
 # Build output
 /build/
+/build-debug/
 
 # Qt hello-world verification (not part of CRISP)
 /qt-hello/
