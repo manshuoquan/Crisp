@@ -8,9 +8,7 @@
 // trace observability (P6, D3).
 //
 // Authoritative spec: docs/ui/04-ui1-architecture.md §1.1 + §2 + §3
-// (sections of §3 still being finalized by the architecture designer; the
-// fully specified surface of §1.1/§2/§4.1 is implemented here, remaining
-// surface uses conservative, documented defaults).
+// (§3 fully finalized; this header implements the §3 surface verbatim).
 //
 // §3.9 ruling: CtWidgetBase INHERITS from crisp::event::CtReceiver —
 // the receiver provides the stable objectId + thread affinity + the
@@ -220,8 +218,6 @@ private:
     /// Record a widget trace entry for this widget (thread-safe ring).
     /// `damageRectCount` is only meaningful for kDamage records.
     void recordTrace(CtWidgetPhase phase, std::uint32_t damageRectCount = 0);
-
-private:
 
     /// Attach this widget as a child of `newParent` (tree surgery; callers
     /// hold the thread assertion and the parent's liveness). The child

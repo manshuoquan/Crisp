@@ -5,8 +5,6 @@
 // root/window coordinates from UI3). Zero heap allocation everywhere.
 // Authoritative spec: docs/ui/04-ui1-architecture.md §2.1/§2.2.
 
-#include <cstdint>
-
 namespace crisp::ui {
 
 /// Axis-aligned integer rectangle. Canonical form: width/height >= 0

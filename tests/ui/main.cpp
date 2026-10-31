@@ -4,6 +4,8 @@
 // test_ct_widget_trace.cpp / test_ct_widget_base.cpp (via static-
 // initialization registrar), then runs them and reports.
 
+#include <cstdio>
+
 #include "test_harness.h"
 
 int main() {
