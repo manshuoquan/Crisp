@@ -10,7 +10,14 @@
 add_library(crisp_ui STATIC
     ct_geometry.cpp
     ct_widget_trace.cpp
-    ct_widget_base.cpp)
+    ct_widget_base.cpp
+    ct_paint_types.cpp        # UI2: CtFont operators (others inline)
+    ct_painter.cpp            # UI2: state machine + command buffer
+    ct_paint_backend_pixel.cpp # UI2: PixelBuffer backend
+    ct_backing_store.cpp      # UI2: backing store
+    # platform layer (UI2 optional, README exception clause):
+    # ct_paint_backend_gdi.cpp
+)
 
 target_include_directories(crisp_ui PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>

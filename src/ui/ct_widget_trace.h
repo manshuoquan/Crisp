@@ -26,6 +26,10 @@ enum class CtWidgetPhase : uint8_t {
     kPainted   = 3, ///< one repaint pass flushed (UI2)
     kFocusIn   = 4, ///< focus entered this widget (UI4)
     kFocusOut  = 5, ///< focus left this widget (UI4)
+    kPaintState = 6, ///< painter save/restore stack-depth change (UI2, WARN-A:
+                     ///< recorded via CtPainter's optional trace sink; an
+                     ///< INDEPENDENT phase — never reuses kDamage, so the
+                     ///< kDamage -> kPainted pairing stays pure, §7.1/§7.2)
 };
 
 /// One widget-side trace record (UI1). Filled by CtWidgetBase on the UI

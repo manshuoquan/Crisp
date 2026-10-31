@@ -30,14 +30,15 @@ using crisp::ui::CtRect;
 using crisp::ui::CtWidgetBase;
 using crisp::ui::CtWidgetPhase;
 
-namespace {
+#include "alloc_tracking.h" // g_allocCount / g_counting (defined below)
+
+// Global counting operators (scoped to this test binary — the single
+// definition, see alloc_tracking.h). markDamage's hot path must not
+// allocate; registration/construction allocate BEFORE the counter is
+// armed.
 std::atomic<std::size_t> g_allocCount{0};
 std::atomic<bool> g_counting{false};
-} // namespace
 
-// Global counting operators (scoped to this test binary). markDamage's
-// hot path must not allocate; registration/construction allocate BEFORE
-// the counter is armed.
 void* operator new(std::size_t size) {
     if (g_counting.load(std::memory_order_relaxed))
         g_allocCount.fetch_add(1, std::memory_order_relaxed);
