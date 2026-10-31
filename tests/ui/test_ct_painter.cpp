@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
+#include <memory>
 #include <new>
 #include <string>
 #include <thread>
@@ -38,7 +39,7 @@ using crisp::ui::CtWidgetTrace;
                             // test_ct_widget_base.cpp, the single anchor TU)
 
 namespace {
-CtPaintBackendPixelBuffer* g_foreignBackend = nullptr; ///< worker-created (test)
+std::shared_ptr<CtPaintBackendPixelBuffer> g_foreignBackend; ///< worker-created (test)
 } // namespace
 
 namespace {
@@ -108,14 +109,23 @@ TEST_CASE(painter_save_restore_stack_balance)
     EXPECT_EQ(painter.stackDepth(), 0u);
 
     // Full stack (kMaxStackDepth = 32): the 33rd save sets overflowed
-    // (WARN-1 ruling; debug asserts, release no-op + flag).
+    // (WARN-1 ruling; debug asserts — abort — release no-op + flag).
+    // Audit K3: the debug path aborts (assert(false)), so the overflow
+    // assertion is RELEASE-ONLY; in debug builds we verify the 32-deep
+    // stack is reached without overflowing (the assert path is the
+    // documented contract, §14).
     for (int i = 0; i < 32; ++i)
         painter.save();
     EXPECT_EQ(painter.stackDepth(), 32u);
     EXPECT_FALSE(painter.overflowed());
-    painter.save(); // overflow
+#ifndef NDEBUG
+    // Debug: the 33rd save would abort — do NOT call it here (contract:
+    // debug abort, §14). We just verify the stack is full.
+#else
+    painter.save(); // overflow (release: no-op + flag)
     EXPECT_TRUE(painter.overflowed());
     EXPECT_EQ(painter.stackDepth(), 32u); // no push happened
+#endif
 
     // end() resets the overflow flag (WARN-5 ruling).
     painter.end();
@@ -280,8 +290,11 @@ TEST_CASE(painter_begin_rejected_on_foreign_thread)
     std::thread worker([] {
         // The backend is created on the WORKER thread: its affinity is
         // bound to the worker (CtThreadAffinity, §5.2). The worker keeps
-        // it alive until the join.
-        g_foreignBackend = new CtPaintBackendPixelBuffer(CtSize{100, 100});
+        // it alive until the join. NOTE: the object is created on the
+        // worker but owned (and destroyed) on the main thread — a shared
+        // ptr crossed the thread boundary; the backend must not be
+        // touched concurrently (it isn't, after the join).
+        g_foreignBackend = std::make_shared<CtPaintBackendPixelBuffer>(CtSize{100, 100});
     });
     worker.join();
 
@@ -300,8 +313,7 @@ TEST_CASE(painter_begin_rejected_on_foreign_thread)
     EXPECT_EQ(painter.commandCount(), 0u);
     EXPECT_FALSE(painter.overflowed());
 
-    delete g_foreignBackend;
-    g_foreignBackend = nullptr;
+    g_foreignBackend.reset(); // RAII destruction (no bare delete)
 }
 
 TEST_CASE(painter_sink_records_paint_state_stack_depth)

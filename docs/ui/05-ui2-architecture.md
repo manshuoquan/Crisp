@@ -704,6 +704,9 @@ add_test(NAME ui_tests COMMAND ui_tests)
 | 03 `CtPainter::save/restore` 未定栈实现 | **定容量值语义栈**（`kMaxStackDepth=32`）+ `stackDepth()` 钩子 + 满栈 overflowed（WARN-1） | 可观测栈平衡（trace 记录） |
 | 03 未定溢出语义 | **overflowed 标志 + 拒绝后续**，`end()` 复位（§10 D9/WARN-5） | 有界缓冲纪律 |
 | 03 未定一帧调用序列 | **§4.3 权威帧序**（markDamage → addDamage → painter.begin/绘制/end → store.flush 仅 present + kPainted/clearDamage）（MUST-3） | 消除"store.flush 重复绘制"歧义 |
+| 05 §4.2 `present` 声明为 `void` | **实现改为 `bool`**（审计 J2 定案：present 成功为 kPainted/clearDamage 配对前置条件，失败不配对且保留 damage 供重试）——接口头注释已登记，本节登记偏差 | 代码审查 SUGGEST-1；`ct_paint_backend.h` |
+| 05 §4.2 仅 `flush(damage)` 单入口 | **实现新增 `submitCommands(cmds, count)`**（审计 PA4 定案：记录命令批经接口投递，替代 dynamic_cast + friend 通道）——接口头注释已登记 | 代码审查 SUGGEST-1；`ct_paint_backend.h` |
+| 05 §4.1 无 `backend()` 访问器 | **实现新增 `CtPainter::backend()` 测试钩子** + `CtPaintState` struct 声明（transform+clip 栈条目） | 代码审查 SUGGEST-2；`ct_painter.h` |
 
 > 其余（CtPainter begin/end、CtPaintBackend size/flush/present、CtBackingStore 单缓冲+脏区合批+BitBlt、双后端、平台例外）与 03 §4.2 一致。
 
