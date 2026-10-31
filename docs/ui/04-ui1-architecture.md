@@ -711,7 +711,12 @@ add_test(NAME ui_tests COMMAND ui_tests)
 - [x] `widget_mark_damage_hot_path_allocates_zero` 通过（§5.2 零堆分配验收）
 - [x] ctest 全量 7/7 通过（event / thread / ui / qt_bridge / dual_run / dual_compare）
 - [x] 代码审计子agent **无 [MUST] 残留**，判定 **CONDITIONAL**：2 个 [WARN]（D6 `create()` 用 `new` 已裁决豁免；非 ASCII 注释字符属项目既有惯例，豁免）均已注明豁免理由；4 个 [SUGGEST] 已全部修复（`ct_widget_base.h` 头注释更新、冗余 `private:` 去除、`ct_geometry.h` 未用 `<cstdint>` 去除、`tests/ui/main.cpp` 补 `<cstdio>`）
-- [ ] 代码审查通过（与本文档设计一致性核对）——**待运行**
+- [x] 代码审查子agent **CONDITIONAL → RETURNED_TO_CODER**，无 [MUST]：2 个 [WARN]（B1 溢出前置条件、D1 零分配测试边界）+ 3 个 [SUGGEST]（A1 未用 include、D4 顺序断言强化、D3 跨线程降级）已处理：
+  - A1：`ct_widget_trace.h` 删除未用 `#include "event/ct_thread_affinity.h"`
+  - B1：`ct_geometry.h` `intersect`/`united` 补 int 溢出前置条件注释
+  - D1：`widget_mark_damage_hot_path_allocates_zero` 补 `dirtyRegion()`/`clearDamage()` 复检 + 计数边界注释
+  - D4：`widget_trace_records_and_copy_out_in_order` 用不同 objectId 强化顺序断言
+  - D3：跨线程降级（§4.2 release no-op）**无法在单线程测试二进制内注入**（affinity 构造时固定、无公开 re-bind 面）→ 记录为 **UI3 输入映射器的回归项**（§13 O2 关联），不塞假测试
 - [x] 本文档 §1–§17 定稿为权威规范（无空节，725 行）
 
 ---

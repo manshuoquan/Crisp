@@ -306,8 +306,7 @@ TEST_CASE(widget_destroyed_trace_keeps_parent_association)
 }
 
 TEST_CASE(widget_mark_damage_hot_path_allocates_zero)
-{
-    auto w = CtWidgetBase::create();
+{    auto w = CtWidgetBase::create();
     w->setGeometry(CtRect{0, 0, 200, 200});
 
     // Warm-up: the trace ring and dirty region are fully constructed; the
@@ -320,13 +319,39 @@ TEST_CASE(widget_mark_damage_hot_path_allocates_zero)
 
     w->markDamage(CtRect{10, 10, 20, 20});
     w->markDamage(CtRect{50, 50, 10, 10});
+    w->dirtyRegion();   // pure accessor: must not allocate either
 
     g_counting.store(false, std::memory_order_relaxed);
     const std::size_t allocs = g_allocCount.load(std::memory_order_relaxed);
 
+    // NOTE: the counting operator new only observes allocations made from
+    // THIS test TU; the hot path's members (CtRegion/CtRect/CtWidgetTrace
+    // ring) are all value/stack members with no hidden allocation, so a
+    // zero count here is a faithful "zero allocation on the damage path"
+    // assertion (review D1 ruling).
     EXPECT_EQ(w->dirtyRegion().bounds.width, 50); // unioned (10..60)
     EXPECT_EQ(w->dirtyRegion().bounds.height, 50);
     EXPECT_EQ(allocs, 0u);
+
+    // clearDamage is also a zero-allocation reset (review D1): assert AFTER
+    // the union checks so the region content is verified first.
+    g_allocCount.store(0, std::memory_order_relaxed);
+    g_counting.store(true, std::memory_order_relaxed);
+    w->clearDamage();
+    g_counting.store(false, std::memory_order_relaxed);
+    EXPECT_EQ(g_allocCount.load(std::memory_order_relaxed), 0u);
+    EXPECT_TRUE(w->dirtyRegion().isEmpty());
 }
+
+// Cross-thread degradation (§4.2): in RELEASE builds assertSameThread()
+// returns false and mutating calls degrade to no-ops. This contract CANNOT
+// be exercised from a single-threaded test binary: the widget's affinity is
+// inherited from CtReceiver and fixed at construction (no public re-bind
+// surface on CtWidgetBase; rebindToCurrentThread is reserved for deliberate
+// receiver moves, event-system §10.2). The release no-op path is therefore
+// covered by code inspection + the assertSameThread contract (debug abort),
+// and full cross-thread input injection is UI3's input-mapper scope (§4.3).
+// Tracked in §16 acceptance checklist as a UI3 regression item (review D3
+// ruling — documented, not stubbed).
 
 } // namespace (anonymous)

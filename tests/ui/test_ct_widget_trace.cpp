@@ -26,7 +26,7 @@ TEST_CASE(widget_trace_records_and_copy_out_in_order)
     r1.when = std::chrono::steady_clock::now();
     CtWidgetRecord r2;
     r2.phase = CtWidgetPhase::kDamage;
-    r2.objectId = 42;
+    r2.objectId = 43; // distinct id: order assertion is meaningful
     r2.damageRectCount = 3;
     r2.when = std::chrono::steady_clock::now();
 
@@ -37,11 +37,11 @@ TEST_CASE(widget_trace_records_and_copy_out_in_order)
     CtWidgetRecord out[4];
     const std::size_t n = trace.copyOut(out, 4);
     EXPECT_EQ(n, 2u);
+    // Order preserved (oldest first): r1 (42) then r2 (43).
     EXPECT_EQ(static_cast<int>(out[0].phase), static_cast<int>(CtWidgetPhase::kCreated));
-    EXPECT_EQ(out[1].objectId, 42u);
-    EXPECT_EQ(out[1].damageRectCount, 3u);
-    // Order preserved (oldest first).
     EXPECT_EQ(out[0].objectId, 42u);
+    EXPECT_EQ(out[1].objectId, 43u);
+    EXPECT_EQ(out[1].damageRectCount, 3u);
 }
 
 TEST_CASE(widget_trace_copy_out_respects_capacity)

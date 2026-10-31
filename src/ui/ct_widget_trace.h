@@ -13,8 +13,6 @@
 #include <cstdint>
 #include <mutex>
 
-#include "event/ct_thread_affinity.h" // crisp::event::CtThreadId
-
 namespace crisp::ui {
 
 /// Widget lifecycle/damage/focus phases (UI1: kCreated/kDestroyed/kDamage

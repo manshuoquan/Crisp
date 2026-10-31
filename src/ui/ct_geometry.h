@@ -35,10 +35,13 @@ struct CtRect {
 
     /// The intersection of this and `other`; empty if disjoint.
     /// Result may be empty (caller checks isEmpty()).
+    /// Precondition: all edges fit in int (widget-local coords, far below
+    /// INT_MAX — same precondition as right()/bottom()).
     CtRect intersect(const CtRect& other) const noexcept;
 
     /// The smallest rect covering both (union bounding box).
     /// If either operand is empty, returns the other (copy).
+    /// Precondition: all edges fit in int (see intersect).
     CtRect united(const CtRect& other) const noexcept;
 };
 
