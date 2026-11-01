@@ -15,9 +15,19 @@ add_library(crisp_ui STATIC
     ct_painter.cpp            # UI2: state machine + command buffer
     ct_paint_backend_pixel.cpp # UI2: PixelBuffer backend
     ct_backing_store.cpp      # UI2: backing store
-    # platform layer (UI2 optional, README exception clause):
-    # ct_paint_backend_gdi.cpp
+    ct_input_mapper.cpp       # UI3: CORE mapper (portable shared
+                              #      mapping table ONLY; NO Qt/Win32
+                              #      dependency, MUST-7)
 )
+
+# platform layer (WARN-5: REQUIRED on Win32, README exception clause):
+if(WIN32)
+    target_sources(crisp_ui PRIVATE
+        platform/ct_input_mapper_win32.cpp   # Win32 MSG -> CtRawMsg -> mapWin32*
+        platform/ct_win32_event_source.cpp
+        platform/ct_platform_window_win32.cpp
+        platform/ct_paint_backend_gdi.cpp)
+endif()
 
 target_include_directories(crisp_ui PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>

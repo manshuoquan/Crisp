@@ -37,6 +37,14 @@ public:
     /// Deactivate; stop producing events.
     virtual void deactivate() noexcept = 0;
 
+    /// True if this source must be polled periodically even when the queue
+    /// is empty (UI3 D10/MUST-1). Sources whose wakeup is NOT delivered
+    /// through the queue's condition variable (e.g. the Win32 message pump:
+    /// a new message does not notify the queue's CV) return true — the loop
+    /// then uses a TIMED wait so exec returns to poll() on timeout. Default
+    /// false: the plain (blocking) wait is fine for queue-notified sources.
+    virtual bool needsPollingWakeup() const noexcept { return false; }
+
     /// The thread this source must run on (usually the loop's thread).
     CtThreadId affinityThread() const noexcept { return m_affinityThread; }
 

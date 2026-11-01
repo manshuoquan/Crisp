@@ -10,6 +10,7 @@
 // The queue is drained ONLY on its affinity thread (the CtEventLoop's
 // thread); push/pushAny may be called from any thread (queue mutex).
 
+#include <chrono>
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
@@ -227,6 +228,14 @@ public:
     /// Affinity-thread only (debug assert).
     virtual void waitForEvent() = 0;
 
+    /// Wait for events with a timeout. Returns TRUE if events are pending
+    /// (or the queue is closed) within `timeout`; FALSE on timeout.
+    /// The caller (CtEventLoop::exec) uses this when platform sources that
+    /// need polling wakeups are attached (UI3 D10/MUST-1: e.g. the Win32
+    /// message pump) — a timed wait lets the loop return to poll() and
+    /// drain PeekMessageW. Affinity-thread only (debug assert).
+    virtual bool waitForEvent(std::chrono::milliseconds timeout) = 0;
+
     /// Wake the affinity thread unconditionally (used by CtEventLoop::quit
     /// so exec exits its wait even when no event is pushed).
     virtual void notifyAll() = 0;
@@ -304,6 +313,10 @@ public:
     /// Block until an event is available (§14 #8, condition-variable wait).
     /// Affinity-thread only (debug assert); spurious wakeups allowed.
     void waitForEvent() override;
+
+    /// Timed variant (UI3 D10/MUST-1): wait_for with the same predicate;
+    /// false on timeout. Affinity-thread only (debug assert).
+    bool waitForEvent(std::chrono::milliseconds timeout) override;
 
     /// Wake the affinity thread unconditionally (CtEventLoop::quit path).
     void notifyAll() override;

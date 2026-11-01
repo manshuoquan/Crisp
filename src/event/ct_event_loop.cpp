@@ -54,6 +54,13 @@ int CtEventLoop::exec() {
         return 0;
     }
 
+    // UI3 D10/MUST-1: if ANY attached source needs polling wakeups (e.g.
+    // the Win32 message pump — a new message does not notify the queue's
+    // condition variable), the wait must be TIMED so exec returns to poll()
+    // and drains PeekMessageW. Evaluated per iteration (S4: stays in sync
+    // with dynamic attach/detach; no caching).
+    constexpr auto kPollingTimeout = std::chrono::milliseconds(16);
+
     while (!m_quit.load(std::memory_order_relaxed) &&
            !m_queue->isClosed()) {
         // 1) Drain the queue (dispatch any pending events into the
@@ -68,10 +75,16 @@ int CtEventLoop::exec() {
         }
 
         // 3) Wait for the next event (§14 #8, condition-variable wait).
-        //    No events + not quitting → block until a push/close notifies.
+        //    No events + not quitting → block until a push/close notifies,
+        //    or (polling sources attached) until the 16ms timeout elapses —
+        //    then loop back to poll() so polling sources get drained.
         if (!m_quit.load(std::memory_order_relaxed) &&
-            !m_queue->isClosed() && m_queue->size() == 0)
-            m_queue->waitForEvent();
+            !m_queue->isClosed() && m_queue->size() == 0) {
+            if (needsPollingWakeup())
+                m_queue->waitForEvent(kPollingTimeout);
+            else
+                m_queue->waitForEvent();
+        }
     }
 
     return iterations;
@@ -124,8 +137,15 @@ bool CtEventLoop::detachSource(const std::shared_ptr<CtEventSource>& source) {
     return true;
 }
 
-std::size_t CtEventLoop::drainOnce() {
-    if (!m_hasDispatcher)
+bool CtEventLoop::needsPollingWakeup() const noexcept {
+    for (const auto& source : m_sources) {
+        if (source->needsPollingWakeup())
+            return true;
+    }
+    return false;
+}
+
+std::size_t CtEventLoop::drainOnce() {    if (!m_hasDispatcher)
         return 0;
 
     std::size_t count = 0;

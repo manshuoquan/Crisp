@@ -94,6 +94,11 @@ private:
     /// contract #2). Returns the number of events dispatched this round.
     std::size_t drainOnce();
 
+    /// True if ANY attached source needs polling wakeups (UI3 D10/MUST-1).
+    /// Evaluated by exec() per iteration — stays in sync with dynamic
+    /// attach/detach (S4); no caching.
+    bool needsPollingWakeup() const noexcept;
+
     std::shared_ptr<CtDispatcherBase> m_dispatcher; ///< attached dispatcher
     /// Per-thread queue; lazily created in setDispatcher (Rev 5, P2-3).
     /// SHARED_PTR (M2 routing decision, §10.1 contract #1/#7): the thread→queue

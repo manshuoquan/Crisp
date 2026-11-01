@@ -34,6 +34,7 @@ bool CtQueue::waitForEvent(std::chrono::milliseconds timeout) {
 
 - **判定机制（P1 补齐）**：`CtEventSource` 增加虚接口 `virtual bool needsPollingWakeup() const noexcept { return false; }`——`CtWin32EventSource` 返回 true（其消息队列是平台队列，不经 `CtQueue` 唤醒）。
 - **exec 判定**：attach 的源中**任一 `needsPollingWakeup()` 为 true** → 用**超时等待**（16ms）；否则保持原无超时等待（纯队列语义）。
+- **判定每迭代评估（S4）**：与 attach/detach 动态一致，不缓存——exec 循环每轮重新检查附加源集合。
 - 超时后回到 poll 阶段，执行各源 `poll(queue)`（Win32 源 `PeekMessageW`）。
 
 ## 2.5 变更清单（M2 核心）
@@ -42,12 +43,13 @@ bool CtQueue::waitForEvent(std::chrono::milliseconds timeout) {
 |------|------|
 | `src/event/ct_queue.h/.inl` | `waitForEvent` 加超时重载（纯虚 + `m_cv.wait_for` 实现） |
 | `src/event/ct_event_source.h` | 加 `needsPollingWakeup()` 虚接口（默认 false） |
-| `src/event/ct_event_loop.cpp` | exec 判定（任一源 needsPollingWakeup → 超时等待 16ms） |
+| `src/event/ct_event_loop.h/.cpp` | 加私有 `needsPollingWakeup()` 判定辅助；exec 判定（任一源 needsPollingWakeup → 超时等待 16ms） |
 
 ## 3. 兼容性
 
-- 原 `waitForEvent()` 无参版本保留（纯队列语义的默认路径）；超时重载为新增纯虚——**所有既有 `CtQueue` 实现需补该重载**（本项目仅一个实现）。
+- 原 `waitForEvent()` 无参版本保留（纯队列语义的默认路径）；超时重载为新增纯虚——**所有既有 `CtQueue` 实现需补该重载**（本项目仅一个实现，`CtQueue<EventSet>` 已补）。
 - 不改变既有 API 行为（无源/无轮询需求时行为不变）。
+- `CtEventSource::needsPollingWakeup()` 默认 `false`：既有源（`CtTimerEventSource`/`ManualEventSource`）行为不变。
 
 ## 4. 关联
 

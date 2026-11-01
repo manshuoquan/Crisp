@@ -283,6 +283,22 @@ void CtQueue<EventSet>::waitForEvent() {
 }
 
 template <typename EventSet>
+bool CtQueue<EventSet>::waitForEvent(std::chrono::milliseconds timeout) {
+    // Affinity-thread only (debug assert; release degrades to a plain
+    // timed wait - same degradation as the untimed variant, whose
+    // assert-only guard also degrades to the plain wait in release).
+    if (!m_affinity.isOnThread()) {
+        assert(false && "CtQueue::waitForEvent(timeout) on non-affinity thread");
+    }
+    // Same predicate as the untimed variant (event available OR closed).
+    // Returns false on timeout — the loop then returns to poll() so
+    // polling sources (e.g. the Win32 message pump, UI3 D10) get drained.
+    std::unique_lock<std::mutex> lock(m_mutex);
+    return m_cv.wait_for(lock, timeout,
+                         [this] { return !m_events.empty() || m_closed; });
+}
+
+template <typename EventSet>
 void CtQueue<EventSet>::notifyAll() {
     m_cv.notify_all();
 }

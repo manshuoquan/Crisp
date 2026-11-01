@@ -12,6 +12,7 @@
 // Value semantics, hot-path zero allocation (stored by value inside
 // CtEvent<CtMousePayload>).
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 
@@ -32,6 +33,11 @@ struct CtMousePayload {
     std::optional<CtMouseButton> button; ///< the changed button (see above)
     CtMouseButtons buttons;  ///< all pressed buttons (bitmask, zero = none)
     CtModifiers modifiers;   ///< keyboard modifiers at event time
+    // UI3 (open question #2 ruling, docs/ui/06-ui3-architecture.md §3.1):
+    // steady-clock timestamp for double-click/hover windows. Win32 mapper
+    // fills GetMessageTime(); Qt-host mode fills QMouseEvent::timestamp().
+    // Zero heap allocation.
+    std::chrono::steady_clock::time_point timestamp{};
 };
 
 } // namespace crisp::input

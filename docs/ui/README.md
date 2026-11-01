@@ -15,9 +15,9 @@
 | 里程碑 | 内容 | 状态 |
 |--------|------|------|
 | UI0 | 调研文档（01/02）+ 重写方案（03） | ✅ 本文档 |
-| UI1 | 核心基座：`CtWidgetBase` 对象树 + 输入载荷下放核心层（CRISP 原生枚举） | ⬜ 未开始 |
-| UI2 | 绘制基元：`CtPainter` + `CtPaintBackend`（GDI + PixelBuffer）+ 脏区合成 | ⬜ 未开始 |
-| UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主（复用 M3/M4 桥） | ⬜ 未开始 |
+| UI1 | 核心基座：`CtWidgetBase` 对象树 + 输入载荷下放核心层（CRISP 原生枚举） | ✅ 已落地 |
+| UI2 | 绘制基元：`CtPainter` + `CtPaintBackend`（GDI + PixelBuffer）+ 脏区合成 | ✅ 已落地 |
+| UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主（复用 M3/M4 桥） | 🔄 实现中（M2 核心扩展 + 核心 mapper + Win32 平台层已落地，8/8 测试通过） |
 | UI4 | 基础控件集 + 布局 + 焦点链：`CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` | ⬜ 未开始 |
 | UI5 | 扩展控件 + 样式 + 声明式 UI 工具（可选） | ⬜ 可选未开始 |
 

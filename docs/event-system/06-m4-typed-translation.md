@@ -71,6 +71,10 @@ struct CtMousePayload {
     Qt::MouseButton button = Qt::NoButton;   ///< the changed button
     Qt::MouseButtons buttons = Qt::NoButton; ///< all pressed buttons
     Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    // UI3 MUST-8 (docs/ui/06-ui3-architecture.md §3.1/D6): timestamp field
+    // added so the Qt-host mapper can fill the core payload's timestamp
+    // from QMouseEvent::timestamp(). Zero heap allocation.
+    std::chrono::steady_clock::time_point timestamp{};
 };
 ```
 
@@ -281,7 +285,7 @@ CtQtTypedPayload keyTranslate(std::unique_ptr<QEvent> ev, bool) {
 | `tests/bridge/test_qt_translator.cpp` | **修改 3 个既有用例**（访问 variant 分支）+ 新增 T1–T4/T1a/T1b/T2a |
 | `tests/bridge/test_qt_event_source.cpp` | **修改 4 个既有用例**（§1.3）+ 新增 S1–S3 + findQueued 新 helper |
 | `tests/bridge/dual/main_bridge.cpp` | **迁移**到 CtMousePayload/CtKeyPayload/CtQtEventPayload 三 handler（§1.3 兼容性） |
-| `docs/event-system/06-m4-typed-translation.md` | 本文档 |
+| `docs/event-system/06-m4-typed-translation.md` | 本文档；**UI3 修订（MUST-8）**：§2.2 CtMousePayload 增 `timestamp` 字段（`std::chrono::steady_clock::time_point`，供 Qt 宿主映射器填充 QMouseEvent::timestamp()） |
 | `docs/event-system/05-qt-bridge.md` | §3.2 契约 #1 修订（桥集新契约 P2-2）；§9 #1 从"已裁定 M4"改为"已落地"；偏差清单补 M4 项 |
 
 **实现备忘（Rev 2 审查残留意见 #4）**：

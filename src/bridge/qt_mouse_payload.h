@@ -14,6 +14,7 @@
 // this payload lives in the bridge layer (src/bridge/), and 05 §5.2
 // contract #1 constrains only the core library (src/event/).
 
+#include <chrono>
 #include <cstdint>
 
 #include <QtCore/qnamespace.h>  // Qt::MouseButton, Qt::KeyboardModifiers
@@ -43,6 +44,10 @@ struct CtMousePayload {
     Qt::MouseButton button = Qt::NoButton;   ///< the changed button
     Qt::MouseButtons buttons = Qt::NoButton; ///< all pressed buttons
     Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    // UI3 MUST-8 (docs/ui/06-ui3-architecture.md §3.1/D6): the bridge mouse
+    // payload gains the timestamp field so the Qt-host mapper can fill the
+    // core payload's timestamp from QMouseEvent::timestamp().
+    std::chrono::steady_clock::time_point timestamp{};
 };
 
 } // namespace crisp::event
