@@ -1,18 +1,20 @@
 # CRISP
 
 > 用现代 C++（C++17）逐步替代 Qt 模块的自研 GUI/应用框架。
-> 当前阶段：**事件系统**（M1-M4 已完成）+ **多线程子系统**（MT1-MT3 已完成，MT4 可选）。
+> 当前阶段：**事件系统**（M1-M4 ✅）+ **多线程子系统**（MT1-MT3 ✅）+ **UI 控件子系统**（UI1-UI3 ✅）。
+> 现状总览：[docs/status.md](docs/status.md)
 
 ---
 
 ## 1. 项目简介
 
-CRISP 的目标是用**纯标准 C++17** 逐步替代 Qt 的各个模块，摆脱 moc/qmake 等代码生成工具链，同时保留 Qt 的成熟设计思想。当前已实现两个子系统：
+CRISP 的目标是用**纯标准 C++17** 逐步替代 Qt 的各个模块，摆脱 moc/qmake 等代码生成工具链，同时保留 Qt 的成熟设计思想。当前已实现三个子系统：
 
 1. **事件系统**（`crisp::event`）——替代 Qt 的 `QCoreApplication` 事件分发部分（M1-M4 完成，含 Qt 桥与双跑验证）。
 2. **多线程子系统**（`crisp::thread`）——替代 Qt 的 `QThread`/`QThreadPool`/`QFuture`/`QtConcurrent`（MT1-MT3 完成：线程生命周期、线程池、强类型任务、可取消 Future、线程→事件回传桥、并行算法）。
+3. **UI 控件子系统**（`crisp::ui`）——替代 Qt 的 `QWidget`/`QPainter`/`QStyle`/`QLayout`/QPA（UI1 对象树 + 脏区 + 轨迹 ✅、UI2 绘制基元 + PixelBuffer 后端 ✅、UI3 平台窗口双模式 + 输入全链路 + GDI 后端 ✅）。
 
-设计文档：`docs/event-system/`（01 调研 → 02 痛点 → 03 重写方案 → 04 重设计规范）、`docs/threading/`（01 架构调研 → 02 痛点 → 03 重写方案）。
+设计文档：`docs/event-system/`（01 调研 → 02 痛点 → 03 重写方案 → 04 重设计规范）、`docs/threading/`（01 架构调研 → 02 痛点 → 03 重写方案）、`docs/ui/`（01 调研 → 02 痛点 → 03 重写方案 → 04/05/06 里程碑规范）。
 
 ## 2. 环境要求
 
@@ -67,7 +69,7 @@ ctest --test-dir build --output-on-failure
 .\build\tests\bridge\bridge_tests.exe
 ```
 
-当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ Qt 桥 30 例 + dual 双跑字节比对。
+当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ UI 子系统（ui_tests + ui3_platform 11 + ui3_qt_mapper 7）+ Qt 桥 30 例 + dual 双跑字节比对（ctest 9/9 全绿）。
 
 ### 3.4 运行示例
 
@@ -159,6 +161,20 @@ Qt 事件系统（`QEvent` + `QCoreApplication::notify`）的痛点（详见 `do
 
 > 多线程子系统设计文档：`docs/threading/`（01 架构调研 / 02 痛点 / 03 重写方案 / README 索引）。
 
+**UI 控件子系统（crisp::ui）**
+
+| 里程碑 | 内容 | 状态 |
+|--------|------|------|
+| UI0 | 调研文档（01-03：Qt GUI 架构/痛点/重写方案） | ✅ 过架构审查 PASS |
+| UI1 | 核心基座：`CtWidgetBase` 对象树 + 脏区 + 轨迹 + 输入载荷下放核心层 | ✅ 过审计/审查，测试全绿 |
+| UI2 | 绘制基元：`CtPainter` + `CtPaintBackend`（PixelBuffer）+ 脏区合批 | ✅ 过审计/审查，测试全绿 |
+| UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主 + 输入全链路 + GDI 后端 | ✅ 过审计/审查，测试全绿（含 ui3_platform/ui3_qt_mapper） |
+| UI4 | 基础控件集 + 布局 + 焦点链（`CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout`） | ⬜ 未开始 |
+| UI5 | 扩展控件 + 样式 + 声明式 UI 工具（可选） | ⬜ 可选未开始 |
+
+> UI 控件子系统设计文档：`docs/ui/`（01 架构调研 / 02 痛点 / 03 重写方案 / 04 UI1 / 05 UI2 / 06 UI3 / README 索引）。
+> 现状总览（模块 / 技术栈 / 对比 Qt 提升）：[docs/status.md](docs/status.md)。
+
 ## 5. 目录结构
 
 ```
@@ -166,17 +182,22 @@ crisp/
 ├── AGENTS.md            # 项目编码规范（强制）
 ├── CMakeLists.txt       # 顶层构建
 ├── docs/
+│   ├── status.md        # 现状总览（模块/技术栈/对比 Qt 提升）
 │   ├── style-guide.md   # 风格细则
 │   ├── qt6-xml-ui-and-event-system.md  # Qt 调研
-│   ├── event-system/    # 事件系统设计文档（01-06）
-│   └── threading/       # 多线程子系统设计文档（01-03 + README）
+│   ├── event-system/    # 事件系统设计文档（01-07）
+│   ├── threading/       # 多线程子系统设计文档（01-03 + README）
+│   └── ui/              # UI 控件子系统设计文档（01-06 + README）
 ├── src/
 │   ├── event/           # crisp::event 库源码（纯 C++17，无 Qt 依赖）
 │   ├── thread/          # crisp::thread 库源码（纯 C++17，无 Qt 依赖）
+│   ├── ui/              # crisp::ui 库源码（纯 C++17 核心 + platform/ 平台层）
+│   │   └── platform/    # Win32/Qt 宿主平台层（if(WIN32)/if(Qt6_FOUND) 条件编译）
 │   └── bridge/          # M3 Qt 桥（仅 Qt6 存在时编译）
 ├── tests/
 │   ├── event/           # 单元测试（手写 test double，无 mock）
 │   ├── thread/          # 多线程单元测试（MT1-MT3）
+│   ├── ui/              # UI 单元测试 + platform/ 平台冒烟
 │   └── bridge/          # Qt 桥测试 + dual 双跑验证
 └── examples/
     └── event_demo/      # 演示程序
