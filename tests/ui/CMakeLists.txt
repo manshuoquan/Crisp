@@ -42,3 +42,19 @@ if(WIN32)
     endif()
     add_test(NAME ui3_platform_tests COMMAND ui3_platform_tests)
 endif()
+
+# UI3 Qt-host mapper tests (C1: mapBridge* is Qt-dependent - run under a
+# Qt-enabled test target; bridge payloads include QString/Qt::Key):
+if(Qt6_FOUND)
+    add_executable(ui3_qt_mapper_tests
+        platform/main_qt.cpp
+        platform/test_ct_input_mapper_qt.cpp)
+    target_include_directories(ui3_qt_mapper_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../event)
+    target_link_libraries(ui3_qt_mapper_tests PRIVATE
+        crisp::ui crisp::event Qt6::Core Qt6::Gui)
+    if(MINGW)
+        target_link_options(ui3_qt_mapper_tests PRIVATE -mconsole)
+    endif()
+    add_test(NAME ui3_qt_mapper_tests COMMAND ui3_qt_mapper_tests)
+endif()

@@ -13,7 +13,12 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 
+#include <chrono>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>   // GetTickCount64 (D6 Qt-side timestamp conversion)
+#endif
 
 namespace crisp::event {
 
@@ -49,10 +54,30 @@ CtQtTypedPayload mouseTranslate(std::unique_ptr<QEvent> ev, bool) {
     if (me == nullptr)
         return CtQtTypedPayload(CtQtEventPayload(std::move(ev)));
     const QPointF pos = me->position();
+    // UI3 MUST-8 (docs/ui/06-ui3-architecture.md §3.1/D6): fill the bridge
+    // payload's timestamp from QMouseEvent::timestamp() so the Qt-host
+    // mapper can pass it through to the core payload.
+    // D6 Qt-side conversion: steady_clock::now() - (boot_ms - qt_ts_ms),
+    // where boot_ms is the platform boot-relative time (GetTickCount64 on
+    // the current Windows target) and qt_ts_ms is QMouseEvent::timestamp()
+    // (ms since process start - W-4 assumption for the current target).
+    // Bounded deviation (not exact conversion) per W-4.
+    const auto bootMs = std::chrono::milliseconds(
+#ifdef _WIN32
+        static_cast<std::int64_t>(GetTickCount64()));
+#else
+        static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count()));
+#endif
+    const auto tsMs = std::chrono::milliseconds(
+        static_cast<std::int64_t>(me->timestamp()));
+    const auto ts = std::chrono::steady_clock::now() - (bootMs - tsMs);
     return CtMousePayload{mouseActionFor(me->type()),
                           static_cast<int>(pos.x()),
                           static_cast<int>(pos.y()),
-                          me->button(), me->buttons(), me->modifiers()};
+                          me->button(), me->buttons(), me->modifiers(), ts};
 }
 
 /// (M4) Typed key translator: QKeyEvent -> CtKeyPayload (§5.2).

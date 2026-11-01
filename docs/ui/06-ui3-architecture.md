@@ -673,6 +673,7 @@ add_test(NAME ui_tests COMMAND ui_tests)
 | Qt 宿主 `CtQtEventSource` 复用 | **抽象为 `CtPlatformWindow::eventSource()` 返回 `shared_ptr<CtEventSource>`**（M3/M4 封装）；**Qt 宿主源 = 新封装 `CtQtHostEventSource<CtUiEventSet>`**（内部复用 M4 翻译器 → mapBridge* → 强类型 push；不能直接复用 M4 源——桥集与 UI EventSet 不同，W-1） | 双模式统一接口（D1）；EventSet 硬契约（MUST-2） |
 | 未定 EventSet | **`CtUiEventSet`（Mouse/Key/Timer）+ `CtWin32EventSource<CtUiEventSet>` 模板化**（MUST-2） | 非模板源无强类型注入通道（04 §7.12 契约 #6） |
 | 未定 M2 超时签名 | **`virtual bool waitForEvent(std::chrono::milliseconds timeout) = 0`**（false=超时）+ **`CtEventSource::needsPollingWakeup()` 虚接口**（exec 判定：任一源 true → 超时等待 16ms）（W-2/P1） | MUST-1/D10 钉死 |
+| §9.1 CMake `if(QT_FOUND)` | **实现用 `if(Qt6_FOUND)`**（CMake 规范变量；`QT_FOUND` 不存在，顶层 `find_package(Qt6)` 定义 `Qt6_FOUND`） | 与顶层 CMake 实际探测一致；`src/ui` 在顶层 find_package 之前 add_subdirectory，故该目录自行幂等探测（登记偏差） |
 
 > 其余（双模式一个接口、消息泵 = CtEventSource、唯一映射点、控件层之后载荷一致）与 03 §4.3 一致。
 

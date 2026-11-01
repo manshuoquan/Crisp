@@ -31,12 +31,27 @@ endif()
 
 target_include_directories(crisp_ui PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../event>
     $<INSTALL_INTERFACE:include>)
 
 target_compile_features(crisp_ui PUBLIC cxx_std_17)
 
 # crisp::ui consumes the event subsystem (CtReceiver base, payloads).
 target_link_libraries(crisp_ui PUBLIC crisp::event)
+
+# Qt-host mode (C1: Qt-enabled branch; bridge payloads are Qt-dependent,
+# MUST-7 keeps them out of the core library; UI3 W-1 adds the host source).
+# NOTE: this subdirectory is added BEFORE the top-level find_package(Qt6)
+# probe, so it must probe Qt itself (idempotent cache hit).
+find_package(Qt6 COMPONENTS Core Gui QUIET)
+if(Qt6_FOUND)
+    target_sources(crisp_ui PRIVATE
+        platform/ct_input_mapper_bridge.cpp)      # mapBridge* (Qt-host)
+    target_sources(crisp_ui PRIVATE
+        platform/ct_qt_host_event_source.cpp)     # CtQtHostEventSource<CtUiEventSet> (W-1)
+    target_link_libraries(crisp_ui PRIVATE
+        Qt6::Core Qt6::Gui)                       # QEvent/QKeyEvent (QtGui)
+endif()
 
 # Alias so consumers can link crisp::ui
 add_library(crisp::ui ALIAS crisp_ui)

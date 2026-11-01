@@ -108,6 +108,10 @@ mapWin32Mouse(const CtRawMsg& msg, const CtSize& widgetLocalSize,
               CtDblClickState& dblClick) noexcept {
     if (!isMouseMsg(msg.msg))
         return CtInputMapperResult{std::monostate{}};
+    // Section 14 contract: a ZERO-size surface has no hittable area - the
+    // mapper refuses (isInput==false) instead of emitting a payload.
+    if (widgetLocalSize.isEmpty())
+        return CtInputMapperResult{std::monostate{}};
 
     CtMousePayload p;
     p.action = actionForMsg(msg.msg);

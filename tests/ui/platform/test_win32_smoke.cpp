@@ -146,6 +146,21 @@ TEST_CASE(win32_mapper_unknown_vk_maps_kUnknown)
     EXPECT_EQ(k.key, CtKeyButton::kUnknown);
 }
 
+TEST_CASE(win32_mapper_zero_size_surface_rejects)
+{
+    // Section 14 contract: a ZERO-size surface has no hittable area ->
+    // isInput==false.
+    CtDblClickState dbl;
+    CtRawMsg down{};
+    down.msg = WM_LBUTTONDOWN;
+    down.ptX = 5;
+    down.ptY = 5;
+    EXPECT_FALSE(crisp::ui::platform::isInput(
+        mapWin32Mouse(down, crisp::ui::CtSize{0, 0}, dbl)));
+    EXPECT_FALSE(crisp::ui::platform::isInput(
+        mapWin32Mouse(down, crisp::ui::CtSize{-1, 10}, dbl)));
+}
+
 TEST_CASE(win32_mapper_dblclick_down_up_down_sequence)
 {
     // D7/MUST-4: the DOWN->UP->DOWN sequence must yield kDblClick on the
