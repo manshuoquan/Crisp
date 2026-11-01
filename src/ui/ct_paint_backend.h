@@ -30,9 +30,10 @@ public:
 
     /// Deliver the recorded command batch of one paint pass to the
     /// backend (PA4; called by CtPainter::end BEFORE flush). The command
-    /// array stays valid only for the duration of this call — the
-    /// backend must execute (or copy) synchronously. Must be thread-
-    /// affined to the UI thread.
+    /// array stays valid only until the synchronous flush() within the
+    /// same end() call - the backend must execute (or copy) before
+    /// returning from flush (both backends store the pointer, PA4, and
+    /// clear it after flush). Must be thread-affined to the UI thread.
     virtual void submitCommands(const CtPaintCmd* cmds, std::size_t count) noexcept = 0;
 
     /// Commit the batched primitives of one paint pass (called by

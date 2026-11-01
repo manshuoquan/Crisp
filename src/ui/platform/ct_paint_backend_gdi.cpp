@@ -12,9 +12,6 @@
 
 #include "ct_paint_backend_gdi.h"
 
-#include <algorithm>
-#include <cassert>
-
 #include "../ct_paint_cmd.h"   // CtPaintCmd / CtPaintCmdType
 #include "../../event/ct_thread_affinity.h"  // CtThreadAffinity
 
@@ -23,6 +20,11 @@ namespace crisp::ui {
 CtPaintBackendGdi::CtPaintBackendGdi(HWND hwnd) : m_hwnd(hwnd) {
     if (!m_hwnd)
         return;
+    // KNOWN LIMITATION (registered): the memory DC + m_size are created at
+    // construction from the then-current client rect; window RESIZE is NOT
+    // handled (no WM_SIZE path) - present() validates against the stale
+    // m_size. UI3 positions this backend as the platform-layer smoke
+    // deliverable (05 §4.2.2); resize support belongs to UI4.
     m_windowDc = GetDC(m_hwnd);
     RECT client{};
     GetClientRect(m_hwnd, &client);
@@ -50,54 +52,121 @@ CtPaintBackendGdi::~CtPaintBackendGdi() {
 }
 
 CtSize CtPaintBackendGdi::size() const noexcept {
+    // Thread guard (UI3 §5.4): debug abort / release empty size so the
+    // painter's begin() refuses the session (same as PixelBuffer backend).
+    if (!m_affinity.assertSameThread())
+        return CtSize{};
     return m_size;
 }
 
 void CtPaintBackendGdi::submitCommands(const CtPaintCmd* cmds,
                                        std::size_t count) noexcept {
-    // Executed in flush() - the batch is only recorded here (PA4: the
-    // backend must execute or copy synchronously; the painter keeps the
-    // batch alive until end(), and flush runs right after).
-    (void)cmds;
-    (void)count;
+    // Thread rule (UI3 §5.4): the backend is the surface and must be
+    // driven on the UI thread only; debug abort / release no-op.
+    if (!m_affinity.assertSameThread())
+        return;
+    // PA4: interface-level batch delivery. The command array is owned by
+    // the painter and stays valid until the synchronous flush() that
+    // follows end(). Executed in flush() - not copied (zero allocation).
+    m_pendingCmds = cmds;
+    m_pendingCount = count;
 }
 
 void CtPaintBackendGdi::flush(const CtRegion& damage) noexcept {
+    // Thread rule (UI3 §5.4): see submitCommands.
+    if (!m_affinity.assertSameThread())
+        return;
     if (!m_memDc)
         return;
 
-    // The commands were delivered via submitCommands and are held by the
-    // caller (CtPainter's batch lives until end(); flush runs after
-    // submitCommands). UI3 executes the recorded batch by replaying the
-    // painter's buffer - the backend receives the batch in submitCommands;
-    // for the GDI target we execute the solid fills here via the region.
-    //
-    // Note: this backend is the UI3 OPTIONAL deliverable - the required
-    // contract (backing store off-screen correctness) is covered by the
-    // PixelBuffer backend in the core library; the GDI backend executes
-    // fills against the memory DC (double buffer).
+    // Execute the pending command batch into the memory DC (the "real"
+    // drawing, 05 §4.2.2): kFillRect -> FillRect with a solid brush;
+    // kDrawText -> DrawTextW with the resolved font. `damage` is a hint
+    // in UI2 - the recorded commands are executed whole; the dirty-rect
+    // optimization is a UI2 evolution point (O1).
+    if (m_pendingCmds && m_pendingCount > 0) {
+        for (std::size_t i = 0; i < m_pendingCount; ++i) {
+            const CtPaintCmd& cmd = m_pendingCmds[i];
+            if (cmd.type == CtPaintCmdType::kFillRect) {
+                HBRUSH brush = CreateSolidBrush(
+                    RGB(cmd.color.r, cmd.color.g, cmd.color.b));
+                if (brush) {
+                    RECT rc{cmd.rect.x, cmd.rect.y,
+                            cmd.rect.right(), cmd.rect.bottom()};
+                    FillRect(m_memDc, &rc, brush);
+                    DeleteObject(brush);
+                }
+            } else {
+                // kDrawText: DrawTextW with the resolved font (family
+                // UTF-16 -> wchar_t on Windows; empty = default face).
+                HFONT hf = CreateFontW(-static_cast<int>(cmd.fontPixelSize),
+                                       0, 0, 0, FW_NORMAL, 0, 0, 0,
+                                       DEFAULT_CHARSET, 0, 0,
+                                       CLEARTYPE_QUALITY, 0,
+                                       cmd.family.empty()
+                                           ? L"Segoe UI"
+                                           : reinterpret_cast<const wchar_t*>(
+                                                 cmd.family.data()));
+                if (hf) {
+                    HGDIOBJ old = SelectObject(m_memDc, hf);
+                    SetTextColor(m_memDc,
+                                 RGB(cmd.color.r, cmd.color.g, cmd.color.b));
+                    SetBkMode(m_memDc, TRANSPARENT);
+                    RECT rc{cmd.origin.x, cmd.origin.y,
+                            cmd.origin.x + 1024, cmd.origin.y + 1024};
+                    const int len = static_cast<int>(cmd.text.size());
+                    // D7: single-line, as-is rendering (no wrapping, no
+                    // '&' mnemonics, no alignment).
+                    DrawTextW(m_memDc,
+                              reinterpret_cast<LPCWSTR>(cmd.text.data()),
+                              len, &rc,
+                              DT_LEFT | DT_TOP | DT_NOCLIP |
+                                  DT_SINGLELINE | DT_NOPREFIX);
+                    SelectObject(m_memDc, old);
+                    DeleteObject(hf);
+                }
+            }
+        }
+    }
+    // The batch is single-use: clear the channel so a later flush without
+    // a painter session executes nothing.
+    m_pendingCmds = nullptr;
+    m_pendingCount = 0;
     (void)damage;
 }
 
 bool CtPaintBackendGdi::present(const CtRect& rect) noexcept {
+    // Thread rule (UI3 §5.4): see submitCommands.
+    if (!m_affinity.assertSameThread())
+        return false;
     if (!m_memDc || !m_windowDc)
         return false;
-    const int x = std::max(0, rect.x);
-    const int y = std::max(0, rect.y);
-    const int w = std::min(rect.width, m_size.width - x);
-    const int h = std::min(rect.height, m_size.height - y);
-    if (w <= 0 || h <= 0)
-        return true; // nothing to blit - no-op success
-    return BitBlt(m_windowDc, x, y, w, h, m_memDc, x, y, SRCCOPY) != 0;
+    // Out-of-surface rect: report FAILURE (the store must NOT write
+    // kPainted / clearDamage when present fails - J2 pairing precondition).
+    // UNIFORM policy: any edge outside the surface is a failure (no
+    // clamping - a clamped blit would claim success for a region the
+    // surface never painted).
+    if (rect.x < 0 || rect.y < 0 ||
+        rect.right() > m_size.width || rect.bottom() > m_size.height ||
+        rect.width <= 0 || rect.height <= 0)
+        return false;
+    return BitBlt(m_windowDc, rect.x, rect.y, rect.width, rect.height,
+                  m_memDc, rect.x, rect.y, SRCCOPY) != 0;
 }
 
 bool CtPaintBackendGdi::fontMetrics(const CtFont& font,
                                     const std::u16string_view& text,
                                     CtPaintMetrics& out) const noexcept {
+    // Thread rule (UI3 §5.4): const entry but the GDI DC is stateful and
+    // single-threaded; debug abort / release false.
+    if (!m_affinity.assertSameThread())
+        return false;
     // UI2 fixed-metric contract; GDI resolution via GetTextExtentPoint32W.
     if (!m_windowDc)
         return false;
-    HGDIOBJ old = nullptr;
+    // font.family is std::u16string (UTF-16 code units). On Windows,
+    // wchar_t IS UTF-16 (2 bytes), so the reinterpret cast is the
+    // sanctioned platform mapping (B2 documented: Windows-only backend).
     HFONT hf = CreateFontW(-font.pixelSize, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                            DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
                            font.family.empty()
@@ -106,14 +175,15 @@ bool CtPaintBackendGdi::fontMetrics(const CtFont& font,
                                      font.family.data()));
     if (!hf)
         return false;
-    old = SelectObject(m_windowDc, hf);
+    HGDIOBJ old = SelectObject(m_windowDc, hf);
     SIZE s{};
     const int len = static_cast<int>(text.size());
-    GetTextExtentPoint32W(m_windowDc,
-                          reinterpret_cast<LPCWSTR>(text.data()),
-                          len, &s);
+    const BOOL ok = GetTextExtentPoint32W(
+        m_windowDc, reinterpret_cast<LPCWSTR>(text.data()), len, &s);
     SelectObject(m_windowDc, old);
     DeleteObject(hf);
+    if (!ok)
+        return false;  // metrics failed - report the capability as absent
     out.width = s.cx;
     out.height = s.cy;
     return true;

@@ -12,6 +12,7 @@
 
 #include "ui/ct_input_mapper.h"
 #include "ui/ct_platform_window.h"
+#include "ui/platform/ct_paint_backend_gdi.h"
 #include "ui/platform/ct_platform_window_win32.h"
 #include "ui/platform/ct_win32_event_source.h"
 
@@ -232,6 +233,53 @@ TEST_CASE(win32_platform_window_contract)
     EXPECT_TRUE(win.eventSource() != nullptr);
     // The source is the Win32 pump, needs polling wakeup (D10).
     EXPECT_TRUE(win.eventSource()->needsPollingWakeup());
+}
+
+// ---------------------------------------------------------------------------
+// CtPaintBackendGdi contract (UI3 §5.4 thread guard + basic ops)
+// ---------------------------------------------------------------------------
+
+TEST_CASE(gdi_backend_thread_guard_and_contract)
+{
+    // GDI backend targets a real window DC (thread-affined to the
+    // constructing thread, UI3 §5.4). Create a hidden window.
+    crisp::ui::CtPlatformWindowWin32 win("GDI smoke", 320, 240);
+    const auto size = win.surfaceSize();
+
+    crisp::ui::CtPaintBackendGdi gdi(win.nativeHandle());
+    // size() from the affinity thread returns the client size.
+    EXPECT_TRUE(gdi.size().width > 0);
+    // submitCommands/flush/present must be callable (no crash).
+    gdi.submitCommands(nullptr, 0);
+    gdi.flush(crisp::ui::CtRegion{});
+    // present with an empty/out-of-surface rect = FAILURE (the store must
+    // not pair kPainted; J2).
+    EXPECT_FALSE(gdi.present(crisp::ui::CtRect{}));
+    EXPECT_FALSE(gdi.present(crisp::ui::CtRect{-5, 0, 10, 10}));  // left edge
+    EXPECT_FALSE(gdi.present(crisp::ui::CtRect{0, 0, 9999, 9999})); // overflow
+    // A real in-surface dirty rect succeeds.
+    EXPECT_TRUE(gdi.present(crisp::ui::CtRect{0, 0, 10, 10}));
+
+    // Real command batch: submit a fill + text, flush executes into the
+    // memory DC, present blits (05 §4.2.2 FillRect/DrawTextW path).
+    const char16_t text[] = u"Hi";
+    const crisp::ui::CtPaintCmd cmds[] = {
+        {crisp::ui::CtPaintCmdType::kFillRect,
+         crisp::ui::CtRect{0, 0, 20, 20}, {}, crisp::ui::CtColor{255, 0, 0, 255},
+         14, {}, {}},
+        {crisp::ui::CtPaintCmdType::kDrawText,
+         {}, crisp::ui::CtPoint{2, 2}, crisp::ui::CtColor{0, 0, 255, 255},
+         14, {}, std::u16string_view(text, 2)},
+    };
+    gdi.submitCommands(cmds, 2);
+    gdi.flush(crisp::ui::CtRegion{});
+    EXPECT_TRUE(gdi.present(crisp::ui::CtRect{0, 0, 20, 20}));
+    // fontMetrics on a non-empty font.
+    crisp::ui::CtPaintMetrics m{};
+    const bool hasMetrics = gdi.fontMetrics(
+        crisp::ui::CtFont{}, u"Hello", m);
+    EXPECT_TRUE(hasMetrics);
+    (void)size;
 }
 
 } // namespace

@@ -31,6 +31,10 @@ public:
     /// The client rect in device pixels (for the backing store).
     CtSize surfaceSize() const noexcept override;
 
+    /// The native window handle (platform layer; UI3 §5.4 GDI backend
+    /// targets the window DC via the borrowed HWND).
+    HWND nativeHandle() const noexcept { return m_hwnd; }
+
     void show() override;
     void hide() noexcept override;
 

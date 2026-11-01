@@ -8,6 +8,7 @@
 #include <windows.h>  // HDC/HWND (platform layer; Win32-only header, S-4)
 
 #include "../ct_paint_backend.h"   // crisp::ui::CtPaintBackend
+#include "../../event/ct_thread_affinity.h" // crisp::event::CtThreadAffinity
 
 namespace crisp::ui {
 
@@ -38,6 +39,13 @@ private:
     HBITMAP m_memBitmap = nullptr; ///< back buffer bitmap
     HBITMAP m_oldBitmap = nullptr; ///< restore on dtor
     CtSize m_size{};            ///< cached client size
+    /// Thread guard anchor (UI3 §5.4): flush/present/fontMetrics entry
+    /// assertSameThread (debug abort / release degrade - same rule as the
+    /// PixelBuffer backend, 05 §5.2). Set on the constructing thread.
+    crisp::event::CtThreadAffinity m_affinity;
+    /// Batch delivered via submitCommands (PA4; valid until flush()).
+    const CtPaintCmd* m_pendingCmds = nullptr;
+    std::size_t m_pendingCount = 0;
 };
 
 } // namespace crisp::ui
