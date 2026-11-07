@@ -59,8 +59,10 @@ void CtPushButton::setEnabled(bool enabled) noexcept {
 
 void CtPushButton::onMouseInput(const crisp::input::CtMousePayload& payload) {
     // The explicit state machine (pure logic, no platform dependency).
-    // Coordinates are widget-local (crisp::input contract).
-    const bool inside = hitTest(payload.x, payload.y);
+    // Coordinates are WIDGET-LOCAL (crisp::input contract) — the local
+    // hit test (dual-run O4 fix: hitTest is parent-local; the payload is
+    // local, so use localHitTest).
+    const bool inside = localHitTest(payload.x, payload.y);
 
     switch (payload.action) {
     case crisp::input::CtMouseAction::kPress: {

@@ -1,7 +1,7 @@
 # CRISP
 
 > 用现代 C++（C++17）逐步替代 Qt 模块的自研 GUI/应用框架。
-> 当前阶段：**事件系统**（M1-M4 ✅）+ **多线程子系统**（MT1-MT3 ✅）+ **UI 控件子系统**（UI1-UI5 ✅）。
+> 当前阶段：**事件系统**（M1-M4 ✅）+ **多线程子系统**（MT1-MT3 ✅）+ **UI 控件子系统**（UI1-UI5 + O4 双跑 ✅）。
 > 现状总览：[docs/status.md](docs/status.md)
 
 ---
@@ -12,7 +12,7 @@ CRISP 的目标是用**纯标准 C++17** 逐步替代 Qt 的各个模块，摆�
 
 1. **事件系统**（`crisp::event`）——替代 Qt 的 `QCoreApplication` 事件分发部分（M1-M4 完成，含 Qt 桥与双跑验证）。
 2. **多线程子系统**（`crisp::thread`）——替代 Qt 的 `QThread`/`QThreadPool`/`QFuture`/`QtConcurrent`（MT1-MT3 完成：线程生命周期、线程池、强类型任务、可取消 Future、线程→事件回传桥、并行算法）。
-3. **UI 控件子系统**（`crisp::ui`）——替代 Qt 的 `QWidget`/`QPainter`/`QStyle`/`QLayout`/QPA（UI1 对象树 + 脏区 + 轨迹 ✅、UI2 绘制基元 + PixelBuffer 后端 ✅、UI3 平台窗口双模式 + 输入全链路 + GDI 后端 ✅、UI4 基础控件集 `CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` 布局 + `CtFocusChain` 焦点链 ✅、UI5 样式系统 `CtStyle`/`CtBasicStyle` 三原色集 + 控件绘制委托 ✅）。
+3. **UI 控件子系统**（`crisp::ui`）——替代 Qt 的 `QWidget`/`QPainter`/`QStyle`/`QLayout`/QPA（UI1 对象树 + 脏区 + 轨迹 ✅、UI2 绘制基元 + PixelBuffer 后端 ✅、UI3 平台窗口双模式 + 输入全链路 + GDI 后端 ✅、UI4 基础控件集 `CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` 布局 + `CtFocusChain` 焦点链 ✅、UI5 样式系统 `CtStyle`/`CtBasicStyle` 三原色集 + 控件绘制委托 ✅、O4 控件树级完整双跑 Win32 vs Qt 宿主字节一致 ✅）。
 
 设计文档：`docs/event-system/`（01 调研 → 02 痛点 → 03 重写方案 → 04 重设计规范）、`docs/threading/`（01 架构调研 → 02 痛点 → 03 重写方案）、`docs/ui/`（01 调研 → 02 痛点 → 03 重写方案 → 04/05/06 里程碑规范）。
 
@@ -55,7 +55,10 @@ cmake --build build --parallel 2
 - `build/src/thread/libcrisp_thread.a` — 多线程库（静态）
 - `build/tests/event/event_tests.exe` — 事件单元测试
 - `build/tests/thread/thread_tests.exe` — 多线程单元测试
-- `build/examples/event_demo/event_demo.exe` — 示例程序
+- `build/examples/event_demo/event_demo.exe` — 示例程序（事件系统）
+- `build/examples/thread_demo/thread_demo.exe` — 示例程序（多线程）
+- `build/examples/ui_demo/ui_demo.exe` — 示例程序（UI 控件）
+- `build/examples/qt_bridge_demo/qt_bridge_demo.exe` — 示例程序（Qt 桥，仅 Qt6）
 
 ### 3.3 运行单元测试
 
@@ -69,17 +72,30 @@ ctest --test-dir build --output-on-failure
 .\build\tests\bridge\bridge_tests.exe
 ```
 
-当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ UI 子系统（ui_tests 103 例含 UI4 控件/布局/焦点链 + UI5 样式 + ui3_platform 11 + ui3_qt_mapper 7）+ Qt 桥 30 例 + dual 双跑字节比对（ctest 9/9 全绿）。
+当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ UI 子系统（ui_tests 103 例含 UI4 控件/布局/焦点链 + UI5 样式 + ui3_platform 11 + ui3_qt_mapper 7 + O4 双跑 3 项）+ Qt 桥 30 例 + M3/M4 dual 双跑字节比对（ctest 12/12 全绿）。
 
 ### 3.4 运行示例
 
 ```powershell
+# 事件系统示例（M1 同步分发 + M2 异步循环/定时器/trace）
 .\build\examples\event_demo\event_demo.exe
+
+# 多线程示例（MT1-MT3：线程池/Future/并行算法/任务完成回传）
+.\build\examples\thread_demo\thread_demo.exe
+
+# UI 控件示例（UI1-UI5：对象树/布局/焦点链/离屏绘制/语义事件）
+.\build\examples\ui_demo\ui_demo.exe
+
+# Qt 桥示例（需 Qt6 已配置；Qt 事件捕获进 CRISP 循环 + postToQt 回投）
+.\build\examples\qt_bridge_demo\qt_bridge_demo.exe
 ```
 
 示例演示完整链路：
-- **M1 同步**：`send` 分发、过滤器拦截、观察者 pre/post、trace 记录
-- **M2 异步**：`post` 投递、`CtEventLoop` 排空、`CtTimerEventSource` 定时注入
+
+- **event_demo**：`send` 分发、过滤器拦截、观察者 pre/post、trace 记录；`post` 投递、`CtEventLoop` 排空、`CtTimerEventSource` 定时注入
+- **thread_demo**：`CtThreadPool` 提交/取消、`CtFuture` 等待与结果、`CtParallel::map/filter/reduce` 并行算法、`CtTaskEventBridge` 把任务完成事件回传到 UI 线程事件循环
+- **ui_demo**：`CtWidgetBase` 对象树 + `CtBoxLayout` 布局 + `CtFocusChain` 焦点链 + 合成鼠标/键盘输入驱动 `onClick`/`onTextChanged`/焦点语义事件 + `CtPainter` 离屏绘制
+- **qt_bridge_demo**（Qt6 可选）：`CtQtEventSource` 捕获 Qt 事件 → 强类型载荷注入 CRISP 循环；`postToQt` 从 CRISP 回投 Qt 事件
 
 ### 3.5 干净重建（可选）
 
@@ -200,7 +216,10 @@ crisp/
 │   ├── ui/              # UI 单元测试 + platform/ 平台冒烟
 │   └── bridge/          # Qt 桥测试 + dual 双跑验证
 └── examples/
-    └── event_demo/      # 演示程序
+    ├── event_demo/      # 演示程序：事件系统（M1 同步 + M2 异步）
+    ├── thread_demo/     # 演示程序：多线程（线程池/Future/并行/回传桥）
+    ├── ui_demo/         # 演示程序：UI 控件（对象树/布局/焦点/绘制）
+    └── qt_bridge_demo/  # 演示程序：Qt 桥（仅 Qt6 存在时编译）
 ```
 
 ## 6. 项目规则速览（详见 AGENTS.md）

@@ -242,6 +242,16 @@ public:
         return m_geometry.contains(px, py);
     }
 
+    /// (UI4) True if a WIDGET-LOCAL point is inside the widget's LOCAL
+    /// extent. UI1's hitTest is PARENT-local (m_geometry carries the
+    /// parent offset); the input hooks consume WIDGET-LOCAL payloads
+    /// (crisp::input contract), so they must test the LOCAL extent
+    /// (0,0,width,height) — dual-run O4 fix.
+    bool localHitTest(int px, int py) const noexcept {
+        return px >= 0 && py >= 0 && px < m_geometry.width &&
+               py < m_geometry.height;
+    }
+
     /// (UI4) True if the key action is a press (not a release).
     static bool isKeyPress(const crisp::input::CtKeyPayload& p) noexcept {
         return p.action == crisp::input::CtKeyAction::kPress;

@@ -11,10 +11,10 @@
 |--------|---------|----------------|--------|------|
 | 事件系统 | `crisp::event` | `QCoreApplication` 事件分发 / `QEvent` / `QTimer` / `QAbstractEventDispatcher` | M1-M4 | ✅ 全部落地 |
 | 多线程 | `crisp::thread` | `QThread` / `QThreadPool` / `QFuture` / `QtConcurrent` | MT1-MT3 | ✅ 全部落地（MT4 可选未开始） |
-| UI 控件 | `crisp::ui` | `QWidget` / `QPainter` / `QStyle` / `QLayout` / QPA 平台窗口 | UI1-UI5 | ✅ UI1-UI5 全部落地（UI5 样式系统完成） |
+| UI 控件 | `crisp::ui` | `QWidget` / `QPainter` / `QStyle` / `QLayout` / QPA 平台窗口 | UI1-UI5 + O4 | ✅ 全部落地（含控件树级双跑） |
 | Qt 桥 | `crisp::event`（bridge 层） | 无（兼容层） | M3/M4 | ✅ 双跑验证通过 |
 
-**代码量**：`src/` 4 个库（event / thread / ui / bridge）+ `src/ui/platform/` 平台层 10 文件；`tests/` 21 个测试 TU；ctest **9/9** 全绿（UI4 新增 24 例）。
+**代码量**：`src/` 4 个库（event / thread / ui / bridge）+ `src/ui/platform/` 平台层 10 文件；`tests/` 21 个测试 TU + dual 后端；ctest **12/12** 全绿（UI5 新增 7 例 + O4 双跑 3 项）。
 
 ---
 
@@ -115,6 +115,7 @@
 | UI3 | `ct_input_mapper` / `CtWin32EventSource` / `CtQtHostEventSource` / `CtPlatformWindow` / `CtPaintBackendGdi` | 平台输入全链路（双模式：Win32 原生 + Qt 宿主）+ GDI 后端 |
 | UI4 | `CtLabel` / `CtPushButton` / `CtLineEdit` / `CtBoxLayout` / `CtFocusChain` | ✅ 已落地（07 架构规范） |
 | UI5 | `CtStyle` / `CtBasicStyle` 三原色集 + 控件绘制委托 | ✅ 已落地（08 架构规范） |
+| O4 | 控件树级完整双跑（Win32 vs Qt 宿主字节一致） | ✅ 已落地（09 收尾文档） |
 
 ### 4.3 对比 Qt 的提升
 
@@ -186,9 +187,10 @@
 | `ui3_platform_tests` | 11 | Win32 消息映射 + 双击回归 + 平台窗口 + GDI 全链路 |
 | `ui3_qt_mapper_tests` | 7 | Qt 桥映射 + 跨模式一致性 + 零分配 |
 | `qt_bridge_tests` | 30 | M3/M4 桥 + 翻译器 + 事件源 |
-| `dual_run_qt` / `dual_run_bridge` / `dual_compare` | 3 | 双后端字节比对 |
+| `dual_run_qt` / `dual_run_bridge` / `dual_compare` | 3 | M3/M4 双后端字节比对 |
+| `dual_run_ui_win32` / `dual_run_ui_qt` / `dual_ui_compare` | 3 | O4 控件树级双跑：同一控件树双模式字节一致（text/timestamp 排除） |
 
-**ctest 总计：9/9 通过（100%）**（注册来源：`tests/{event,thread,ui,bridge}/CMakeLists.txt`，共 9 个 add_test）。
+**ctest 总计：12/12 通过（100%）**（注册来源：`tests/{event,thread,ui,bridge}/CMakeLists.txt`，共 12 个 add_test）。
 
 ---
 
@@ -199,7 +201,6 @@
 | UI6 | 扩展控件（组合框/复选框/滚动条）+ 声明式 UI 工具 | ⬜ 可选 |
 | MT4 | work-stealing / `CtPromise<T>` | ⬜ 可选 |
 | 事件系统加固 | 对象池、flat-map、`CtOpaqueEvent` | ⬜ |
-| 控件树级完整双跑 | 同一控件树双模式收到相同载荷序列（UI4 控件已完备） | ⬜ |
 | 跨平台 | Qt 宿主模式完整双跑（非 Win32 环境验证） | ⬜ |
 
 ---
