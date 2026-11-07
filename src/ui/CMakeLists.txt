@@ -18,6 +18,12 @@ add_library(crisp_ui STATIC
     ct_input_mapper.cpp       # UI3: CORE mapper (portable shared
                               #      mapping table ONLY; NO Qt/Win32
                               #      dependency, MUST-7)
+    ct_dispatcher_registry.cpp # UI4: per-thread semantic dispatcher registry
+    ct_push_button.cpp        # UI4: explicit button state machine
+    ct_line_edit.cpp          # UI4: single-line text editor
+    ct_label.cpp              # UI4: plain-text label
+    ct_box_layout.cpp         # UI4: two-pass box layout
+    ct_focus_chain.cpp        # UI4: explicit focus chain
 )
 
 # platform layer (WARN-5: REQUIRED on Win32, README exception clause):

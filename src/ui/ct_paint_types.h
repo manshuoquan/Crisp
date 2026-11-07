@@ -67,4 +67,10 @@ struct CtPaintMetrics {
     int height = 0; ///< line height (px)
 };
 
+/// (UI4) Fixed per-side padding (px) of the interactive text widgets'
+/// sizeHint (CtPushButton/CtLineEdit). A shared constant so the button and
+/// the editor agree (1 char per side at the PixelBuffer's 8px char width).
+/// UI5 moves this behind the style system.
+constexpr int kTextWidgetPaddingPx = 8;
+
 } // namespace crisp::ui

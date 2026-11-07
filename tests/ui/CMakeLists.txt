@@ -10,7 +10,13 @@ add_executable(ui_tests
     test_ct_painter.cpp
     test_ct_paint_backend_pixel.cpp
     test_ct_backing_store.cpp
-    test_ct_input_mapper.cpp)     # UI3: mapper table-driven tests
+    test_ct_input_mapper.cpp     # UI3: mapper table-driven tests
+    test_ct_push_button.cpp      # UI4: button state machine + click
+    test_ct_line_edit.cpp        # UI4: text editing + semantic events
+    test_ct_label.cpp            # UI4: label text + size hint
+    test_ct_box_layout.cpp       # UI4: two-pass layout golden cases
+    test_ct_focus_chain.cpp      # UI4: focus stepping + trace pairing
+)
 
 # Reuse the event test harness header (project rule: hand-written, no mock).
 target_include_directories(ui_tests PRIVATE

@@ -8,17 +8,21 @@
 |------|------|------|
 | 01 | [01-qt-gui-architecture.md](./01-qt-gui-architecture.md) | Qt 6 GUI/Widgets 架构调研（QPA、QWidget 基座、QPainter、QStyle、布局、平台输入全链路） |
 | 02 | [02-qt-gui-pain-points.md](./02-qt-gui-pain-points.md) | Qt GUI/Widgets 痛点分级分析（🔴/🟠/🟡 三级，9 类 30 项） |
-| 03 | [03-rewrite-proposal.md](./03-rewrite-proposal.md) | crisp::ui 重写方案（六原则映射、分层架构、接口草案、里程碑路线） | ✅ 本文档（新建） |
+| 03 | [03-rewrite-proposal.md](./03-rewrite-proposal.md) | crisp::ui 重写方案（六原则映射、分层架构、接口草案、里程碑路线） |
+| 04 | [04-ui1-architecture.md](./04-ui1-architecture.md) | UI1 架构规范：对象树 + 显式状态 + 输入门禁 + 脏区 + 轨迹 |
+| 05 | [05-ui2-architecture.md](./05-ui2-architecture.md) | UI2 架构规范：绘制基元 + PixelBuffer/GDI 后端 + 脏区合批 |
+| 06 | [06-ui3-architecture.md](./06-ui3-architecture.md) | UI3 架构规范：平台窗口双模式 + 输入映射器 + 双跑对比 |
+| 07 | [07-ui4-architecture.md](./07-ui4-architecture.md) | UI4 架构规范：基础控件集 + 布局 + 焦点链（本文档，新建） |
 
 ## 里程碑
 
 | 里程碑 | 内容 | 状态 |
 |--------|------|------|
-| UI0 | 调研文档（01/02）+ 重写方案（03） | ✅ 本文档 |
+| UI0 | 调研文档（01/02）+ 重写方案（03） | ✅ |
 | UI1 | 核心基座：`CtWidgetBase` 对象树 + 输入载荷下放核心层（CRISP 原生枚举） | ✅ 已落地 |
 | UI2 | 绘制基元：`CtPainter` + `CtPaintBackend`（GDI + PixelBuffer）+ 脏区合成 | ✅ 已落地 |
-| UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主（复用 M3/M4 桥） | 🔄 实现中（M2 核心扩展 + 核心 mapper + Win32 平台层已落地，8/8 测试通过） |
-| UI4 | 基础控件集 + 布局 + 焦点链：`CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` | ⬜ 未开始 |
+| UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主（复用 M3/M4 桥） | ✅ 已落地 |
+| UI4 | 基础控件集 + 布局 + 焦点链：`CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` + `CtFocusChain` | ✅ 已落地（07 架构规范） |
 | UI5 | 扩展控件 + 样式 + 声明式 UI 工具（可选） | ⬜ 可选未开始 |
 
 ## 关键咬合点

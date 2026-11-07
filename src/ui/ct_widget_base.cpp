@@ -8,6 +8,9 @@
 #include "ct_widget_base.h"
 
 #include <algorithm>
+#include <utility>
+
+#include "ct_dispatcher_registry.h" // semanticDispatcherForCurrentThread
 
 namespace crisp::ui {
 
@@ -148,10 +151,12 @@ void CtWidgetBase::dispatchInput(
         event.ignore();
         return;
     }
-    // UI1: no typed-handler registration surface yet (the §3.10 field
-    // consumption contract and the CtDispatcher-based registration are
-    // being finalized); dispatch is a no-op carrier that records nothing.
-    // UI4 wires the typed handlers via CtReceiver::bindHandler.
+    // UI4: hand the payload to the widget's own input hook (button state
+    // machine / line-edit cursor). The input event itself is NOT accepted
+    // by the widget layer (the app's raw-input handlers consume raw input
+    // via the UI3 event-set queue; the semantic events are the
+    // widget-level product of the hook).
+    onMouseInput(event.payload());
 }
 
 void CtWidgetBase::dispatchInput(
@@ -162,6 +167,15 @@ void CtWidgetBase::dispatchInput(
         event.ignore();
         return;
     }
+    onKeyInput(event.payload());
+}
+
+void CtWidgetBase::onMouseInput(const crisp::input::CtMousePayload& /*payload*/) {
+    // Default: plain widgets do not consume mouse input (no-op).
+}
+
+void CtWidgetBase::onKeyInput(const crisp::input::CtKeyPayload& /*payload*/) {
+    // Default: plain widgets do not consume key input (no-op).
 }
 
 void CtWidgetBase::markDamage(const CtRect& rect) noexcept {
@@ -189,6 +203,41 @@ std::uint64_t CtWidgetBase::objectId() const noexcept {
 
 crisp::event::CtThreadId CtWidgetBase::affinityThread() const noexcept {
     return crisp::event::CtReceiver::affinityThread();
+}
+
+void CtWidgetBase::setFocusFlag(bool focused) noexcept {
+    // Thread rule (P2-4 fix): mutating the focus flag + writing the focus
+    // trace is a widget mutation — assert the widget's thread.
+    if (!assertSameThread())
+        return;
+    if (m_state.hasFocus == focused)
+        return;
+    m_state.hasFocus = focused;
+    if (focused)
+        recordTrace(CtWidgetPhase::kFocusIn);
+    else
+        recordTrace(CtWidgetPhase::kFocusOut);
+}
+
+void CtWidgetBase::setFocusable(bool focusable) noexcept {
+    if (!assertSameThread())
+        return;
+    m_state.focusable = focusable;
+}
+
+void CtWidgetBase::emitFocusGained(crisp::input::CtFocusDirection direction) {
+    crisp::input::CtFocusPayload payload;
+    payload.direction = direction;
+    payload.targetObjectId = objectId();
+    emitSemantic(payload);
+}
+
+void CtWidgetBase::emitFocusLost() {
+    // Focus lost: the payload still identifies the (old) target.
+    crisp::input::CtFocusPayload payload;
+    payload.direction = crisp::input::CtFocusDirection::kNext;
+    payload.targetObjectId = objectId();
+    emitSemantic(payload);
 }
 
 void CtWidgetBase::recordTrace(CtWidgetPhase phase, std::uint32_t damageRectCount) {

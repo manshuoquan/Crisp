@@ -56,6 +56,11 @@ public:
     /// OPTIONAL text metrics capability (D7). Returns false if the backend
     /// does not support text (no drawText). PixelBuffer: fixed values;
     /// GDI: GetTextExtentPoint32W.
+    /// NOEXCEPT CONTRACT (WARN-3 ruling): implementations must not throw —
+    /// callers (CtLabel/CtPushButton/CtLineEdit::sizeHint) run inside
+    /// noexcept layout boundaries and degrade a throw to a zero hint, but
+    /// the interface itself is deliberately NOT noexcept so a backend can
+    /// report failure via return value. Implementations SHOULD NOT throw.
     virtual bool fontMetrics(const CtFont& font, const std::u16string_view& text,
                              CtPaintMetrics& out) const noexcept = 0;
 };

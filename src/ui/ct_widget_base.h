@@ -24,9 +24,15 @@
 #include "event/ct_input.h"         // crisp::input payloads
 #include "event/ct_mouse_payload.h" // CtMousePayload (CRISP_EVENT_TYPE applied)
 #include "event/ct_key_payload.h"   // CtKeyPayload
+#include "event/ct_click_payload.h"     // crisp::input::CtClickPayload (UI4)
+#include "event/ct_focus_payload.h"     // crisp::input::CtFocusPayload (UI4)
 #include "event/ct_receiver.h"      // crisp::event::CtReceiver (base class)
+#include "event/ct_text_changed_payload.h" // crisp::input::CtTextChangedPayload (UI4)
 #include "event/ct_thread_affinity.h" // crisp::event::CtThreadId
+#include "ct_dispatcher_registry.h" // CtSemanticEventSet (UI4)
 #include "ct_geometry.h"            // CtRect / CtRegion
+#include "ct_paint_backend.h"       // CtPaintBackend (sizeHint signature, UI4)
+#include "ct_paint_types.h"         // CtSize (sizeHint signature, UI4)
 #include "ct_widget_state.h"        // CtWidgetState / CtFocusPolicy
 #include "ct_widget_trace.h"        // CtWidgetPhase / CtWidgetRecord / CtWidgetTrace
 
@@ -161,6 +167,11 @@ public:
     bool focusable() const noexcept { return m_state.focusable; }
     bool hasFocus() const noexcept { return m_state.hasFocus; }
 
+    /// (UI4) Set the focusable flag (participates in the focus chain).
+    /// The chain steps only focusable widgets; the focus policy (click vs
+    /// tab) is UI4's CtFocusChain concern.
+    void setFocusable(bool focusable) noexcept;
+
     /// The explicit state struct (read-only view for UI4+).
     const CtWidgetState& widgetState() const noexcept { return m_state; }
 
@@ -169,8 +180,12 @@ public:
     /// Dispatch one mouse event to this widget's input handlers.
     /// Disabled widgets reject input (kUnhandled, no handler invocation).
     /// The payload coordinates are widget-local (crisp::input contract).
-    /// UI1: no hit-testing beyond the widget itself; the UI3 root
-    /// dispatcher walks the tree via childAt()/hitTest().
+    /// UI4: after the gate, the payload is handed to the virtual
+    /// onMouseInput() — the widget's own consumption (the button state
+    /// machine / line-edit cursor live there); the input event itself is
+    /// NOT accepted (the app's raw-input handlers consume raw input via
+    /// the UI3 event-set queue; the semantic events are the widget-level
+    /// product of the virtual hook).
     /// Thread rule: must run on the widget's thread (§4.2).
     void dispatchInput(crisp::event::CtEvent<crisp::input::CtMousePayload>& event);
 
@@ -179,11 +194,118 @@ public:
     /// (focus-chain routing is UI4). Thread rule: see dispatchInput(mouse).
     void dispatchInput(crisp::event::CtEvent<crisp::input::CtKeyPayload>& event);
 
+    // --- UI4 typed handler registration (docs/ui/03-rewrite-proposal.md §4.4)
+    //
+    // Bind a handler to one of the UI4 semantic payload types. The binding
+    // is a THIN convenience over CtReceiver::bindHandler: the default
+    // dispatcher is looked up per call (CtDispatcher registry, one per
+    // affinity thread) and the widget's weak_ptr is passed as the
+    // receiver. The returned RAII token unregisters on destruction.
+    //
+    // Handlers on a given widget see events from the WIDGET'S OWN semantic
+    // emission only (emitSemantic) — they do NOT see raw events routed to
+    // other widgets, and the widget layer deliberately never registers a
+    // broadcast handler.
+
+    /// Bind a click handler (CtClickPayload).
+    crisp::event::CtHandlerToken bindClickHandler(
+        crisp::event::CtHandler<crisp::input::CtClickPayload> handler,
+        std::string_view name = {}) {
+        return bindSemantic<crisp::input::CtClickPayload>(std::move(handler),
+                                                          name);
+    }
+
+    /// Bind a text-changed handler (CtTextChangedPayload).
+    crisp::event::CtHandlerToken bindTextChangedHandler(
+        crisp::event::CtHandler<crisp::input::CtTextChangedPayload> handler,
+        std::string_view name = {}) {
+        return bindSemantic<crisp::input::CtTextChangedPayload>(
+            std::move(handler), name);
+    }
+
+    /// Bind a focus handler (CtFocusPayload).
+    crisp::event::CtHandlerToken bindFocusHandler(
+        crisp::event::CtHandler<crisp::input::CtFocusPayload> handler,
+        std::string_view name = {}) {
+        return bindSemantic<crisp::input::CtFocusPayload>(std::move(handler),
+                                                          name);
+    }
+
     /// True if `px`/`py` (widget-local) is inside this widget's bounds.
     bool hitTest(int px, int py) const noexcept {
         return m_geometry.contains(px, py);
     }
 
+    /// (UI4) True if the key action is a press (not a release).
+    static bool isKeyPress(const crisp::input::CtKeyPayload& p) noexcept {
+        return p.action == crisp::input::CtKeyAction::kPress;
+    }
+
+    /// (UI4) True if the mouse action is a press (not a move/release/dblclick).
+    static bool isMousePress(const crisp::input::CtMousePayload& p) noexcept {
+        return p.action == crisp::input::CtMouseAction::kPress;
+    }
+
+    /// (UI4) Set the focus flag (hasFocus) and record the widget trace
+    /// (kFocusIn with the focus direction). Called by CtFocusChain only —
+    /// the chain is the SINGLE focus owner.
+    void setFocusFlag(bool focused) noexcept;
+
+    /// (UI4) Emit a CtFocusPayload (gained) to this widget's handlers —
+    /// called by CtFocusChain when focus enters. The direction is the
+    /// chain's step direction.
+    void emitFocusGained(crisp::input::CtFocusDirection direction);
+
+    /// (UI4) Emit a CtFocusPayload (lost) to this widget's handlers —
+    /// called by CtFocusChain when focus leaves.
+    void emitFocusLost();
+
+    /// (UI4) Preferred size from the backend's font metrics (one measure
+    /// pass). Default: zero (plain widgets have no intrinsic size; the
+    /// layout gives them the container's size). Text widgets override
+    /// (CtLabel uses backend metrics; CtPushButton/CtLineEdit use the
+    /// backend's fixed text metrics). `backend` must be non-null.
+    /// noexcept (WARN-3 fix): a throwing backend fontMetrics degrades to a
+    /// zero hint — never crosses the layout's noexcept relayout boundary.
+    virtual CtSize sizeHint(CtPaintBackend& backend) const noexcept {
+        (void)backend;
+        return CtSize{};
+    }
+
+protected:
+    // --- UI4 widget input hooks ------------------------------------------
+    //
+    // The widget's OWN consumption of the input payloads (after the
+    // disabled gate). Default: no-op — plain widgets do not consume input.
+    // Interactive widgets (CtPushButton/CtLineEdit) override these to run
+    // their explicit state machines; they emit SEMANTIC events (click /
+    // text-changed / focus) via emitSemantic<T>. Called on the widget's
+    // thread only.
+
+    /// Mouse input hook (UI4): the payload of the dispatched mouse event.
+    /// Button state machine / hover / press-and-release live here.
+    virtual void onMouseInput(const crisp::input::CtMousePayload& payload);
+
+    /// Key input hook (UI4): the payload of the dispatched key event.
+    /// Line-edit text editing / focus stepping live here.
+    virtual void onKeyInput(const crisp::input::CtKeyPayload& payload);
+
+    /// (UI4) Emit a semantic event to THIS widget's handlers of type T.
+    /// Synchronous (CtDispatcher::send on the UI thread); the payload is
+    /// forwarded by value. Requires T ∈ CtSemanticEventSet.
+    template <typename T>
+    void emitSemantic(const T& payload) {
+        auto dispatcher = semanticDispatcher();
+        if (!dispatcher)
+            return;
+        static_assert(CtSemanticEventSet::template contains<T>,
+                      "emitSemantic requires a semantic payload type");
+        crisp::event::CtEvent<T> ev(crisp::event::CtEventOrigin::kApplication,
+                                    payload);
+        dispatcher->send(shared_from_this(), ev);
+    }
+
+public:
     // --- damage (P4 / D2) -----------------------------------------------
 
     /// Mark `rect` (widget-local) as damaged. Damage accumulates into the
@@ -219,6 +341,36 @@ private:
     /// `damageRectCount` is only meaningful for kDamage records.
     void recordTrace(CtWidgetPhase phase, std::uint32_t damageRectCount = 0);
 
+    /// (UI4) The default semantic-event dispatcher for this widget's
+    /// affinity thread (cached on first use — WARN-4 fix: the registry
+    /// lookup + lock is paid once per widget, not per semantic event).
+    /// The registry creates one dispatcher per thread and never closes it,
+    /// so the cached shared_ptr stays valid for the widget's lifetime.
+    std::shared_ptr<crisp::event::CtDispatcher<CtSemanticEventSet>>
+    semanticDispatcher() const {
+        if (!m_semanticDispatcher) {
+            m_semanticDispatcher = semanticDispatcherForCurrentThread();
+        }
+        return m_semanticDispatcher;
+    }
+
+    /// (UI4) Shared implementation of the bind*Handler templates: looks up
+    /// the semantic dispatcher and delegates to CtReceiver::bindHandler.
+    /// Thread rule (P2-1 fix): binding registers a handler on THIS widget —
+    /// a mutation of the widget's dispatch state, so the calling thread
+    /// must own the widget (debug abort; release returns a null token).
+    template <typename T>
+    crisp::event::CtHandlerToken bindSemantic(crisp::event::CtHandler<T> handler,
+                                              std::string_view name) {
+        if (!assertSameThread())
+            return {}; // release: degrade (null token, nothing bound)
+        auto dispatcher = semanticDispatcher();
+        if (!dispatcher)
+            return {}; // no loop thread: nothing to bind to (null token)
+        return bindHandler<CtSemanticEventSet, T>(dispatcher, std::move(handler),
+                                                  name);
+    }
+
     /// Attach this widget as a child of `newParent` (tree surgery; callers
     /// hold the thread assertion and the parent's liveness). The child
     /// entry is built from m_selfWeak (set by the factories) — deliberately
@@ -242,6 +394,10 @@ private:
     CtRegion m_dirty;             ///< accumulated damage (D2)
     std::uint32_t m_damageRectCount = 0; ///< markDamage calls since clearDamage
     CtWidgetTrace m_trace;        ///< widget-side trace ring (D3)
+    /// (UI4) Cached semantic dispatcher (mutable: filled on first use by
+    /// the const semanticDispatcher(); the registry never closes it).
+    mutable std::shared_ptr<crisp::event::CtDispatcher<CtSemanticEventSet>>
+        m_semanticDispatcher;
 };
 
 } // namespace crisp::ui
