@@ -23,6 +23,10 @@
 | 3 | `relayout(const CtRect&)` / `sizeHint() const` | 增加 `CtPaintBackend* backend` 参数（sizeHint 需后端字体度量，§4.4.1 明示） | **合理演进**（sizeHint 的度量来源只能是后端） |
 | 4 | 显式链表 next/prev O(1) | `std::vector<weak_ptr>` + 索引步进（`(idx+step)%n` O(1)） | **合理替代**（复杂度契约满足；头注释已声明） |
 | 5 | — | `distributeShare` 余数补偿（qGeomCalc 模型）+ 全 0 stretch 时均分 | **补充定案**（§4.4.3 未覆盖 stretch=0 的去向；本文件 §3.3 定案） |
+| 6 | §4.5 `CtStyle` 引用 `CtPushButton::CtButtonState` | `CtButtonState` 提为独立头 `ct_button_state.h`，`CtStyle` 只引用状态类型不 include 控件头 | **合理演进**（WARN-6 裁决：纯接口不耦合具体控件；`CtPushButton::CtButtonState` 为 using 别名） |
+| 7 | UI4 sizeHint 用固定 padding（`kTextWidgetPaddingPx`） | UI5 改经 `CtStyle::sizeHint`（padding+border）；`kTextWidgetPaddingPx` 删除 | **演进**（style frame 语义 = 2×padding + 2×border） |
+| 8 | `CtLabel::paint` 直接画在 `rect` 原点 | 尺寸 hint 含 style frame，但 label 无背景框，文本从 `rect` 原点绘制（不内缩 frame） | **登记偏差**（P2：首版可接受——label 透明无框；若未来加背景，paint 需退 frame.width/2） |
+| 9 | 控件 paint 自建 `CtPainter`（UI4 存根时代） | UI5 改 `paint(CtPainter&, rect)`：painter 由 owner（backing store）持有并 begin/end；控件只 record | **合理演进**（WARN-2 裁决：避免调用栈上 0.5MB 命令缓冲） |
 
 ## 3. 关键契约（UI4 定案）
 
@@ -59,12 +63,13 @@
 ## 4. 测试现状
 
 - `tests/ui/test_ct_push_button.cpp` — 状态机全路径（按下/释放/取消/禁用/悬停）、onClick 语义事件、setText+damage。
-- `tests/ui/test_ct_line_edit.cpp` — 编辑全路径（键入/退格/删除/光标/鼠标定位）、onTextChanged、非打印键 no-op、setText 钳制。
-- `tests/ui/test_ct_label.cpp` — 文本存储、setText+damage、sizeHint（PixelBuffer 8x16 固定度量）。
+- `tests/ui/test_ct_line_edit.cpp` — 编辑全路径（键入/退格/删除/光标/鼠标定位含 frame 偏移）、onTextChanged、非打印键 no-op、setText 钳制。
+- `tests/ui/test_ct_label.cpp` — 文本存储、setText+damage、sizeHint（PixelBuffer 8x16 固定度量 + style frame）。
 - `tests/ui/test_ct_box_layout.cpp` — 黄金手算（stretch 余数补偿、嵌套、死控件、sizeHint 聚合、无缝隙断言 `right()==容器宽`）。
 - `tests/ui/test_ct_focus_chain.cpp` — add/dedup、setFocus 轨迹配对、Tab/Backtab 环绕、死控件剪枝、未注册 no-op。
+- `tests/ui/test_ct_style_basic.cpp` — UI5：调色板确定性表驱动、style frame sizeHint、同控件不同 style 不同像素（PixelBuffer 对比）、LineEdit caret、Label 文本色。
 
-**ctest：9/9 全绿**（ui_tests 含 UI4 24 例新增）。
+**ctest：9/9 全绿**（ui_tests 含 UI4 24 例 + UI5 7 例新增）。
 
 ## 5. 后续（UI5）
 

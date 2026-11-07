@@ -16,6 +16,7 @@ add_executable(ui_tests
     test_ct_label.cpp            # UI4: label text + size hint
     test_ct_box_layout.cpp       # UI4: two-pass layout golden cases
     test_ct_focus_chain.cpp      # UI4: focus stepping + trace pairing
+    test_ct_style_basic.cpp      # UI5: style palette + paint delegation
 )
 
 # Reuse the event test harness header (project rule: hand-written, no mock).

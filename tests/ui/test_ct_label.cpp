@@ -51,9 +51,11 @@ TEST_CASE(label_size_hint_from_backend_metrics)
     auto label = CtLabel::create(root, u"abcd"); // 4 chars
     CtPaintBackendPixelBuffer backend(CtSize{200, 100});
 
+    // UI5: the hint = text metrics + the default style's frame
+    // (2*8 horizontal + 2*1 border, 2*4 vertical + 2*1 border).
     const CtSize hint = label->sizeHint(backend);
-    EXPECT_EQ(hint.width, 4 * 8);   // fixed PixelBuffer char width
-    EXPECT_EQ(hint.height, 16);     // fixed PixelBuffer line height
+    EXPECT_EQ(hint.width, 4 * 8 + 2 * 8 + 2 * 1);   // text + frame
+    EXPECT_EQ(hint.height, 16 + 2 * 4 + 2 * 1);     // line + frame
 }
 
 TEST_CASE(label_empty_text_zero_size_hint)
@@ -62,8 +64,8 @@ TEST_CASE(label_empty_text_zero_size_hint)
     auto label = CtLabel::create(root);
     CtPaintBackendPixelBuffer backend(CtSize{200, 100});
     const CtSize hint = label->sizeHint(backend);
-    EXPECT_EQ(hint.width, 0);
-    EXPECT_EQ(hint.height, 16); // the line height is a constant
+    EXPECT_EQ(hint.width, 2 * 8 + 2 * 1);  // empty text: frame only
+    EXPECT_EQ(hint.height, 16 + 2 * 4 + 2 * 1); // line height + frame
 }
 
 } // namespace (anonymous)

@@ -225,6 +225,16 @@ void CtWidgetBase::setFocusable(bool focusable) noexcept {
     m_state.focusable = focusable;
 }
 
+void CtWidgetBase::setStyle(const CtStyle* style) noexcept {
+    if (!assertSameThread())
+        return;
+    // WARN-7 ruling: the caller keeps the style alive (documented);
+    // nullptr is a SANCTIONED "revert to the default CtBasicStyle" (a
+    // program-lifetime static) — a dangling NON-null pointer is a caller
+    // contract violation that debug tooling (ASan) catches.
+    m_style = style;
+}
+
 void CtWidgetBase::emitFocusGained(crisp::input::CtFocusDirection direction) {
     crisp::input::CtFocusPayload payload;
     payload.direction = direction;

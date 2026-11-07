@@ -8,6 +8,11 @@
 
 #include <utility>
 
+#include "ct_paint_backend.h" // CtPaintBackend (paint surface)
+#include "ct_painter.h"       // CtPainter (begin/drawText)
+#include "ct_style.h"         // CtStyle (paint queries)
+#include "ct_style_basic.h"   // defaultStyle() (UI5)
+
 namespace crisp::ui {
 
 std::shared_ptr<CtLabel> CtLabel::create(
@@ -35,22 +40,24 @@ void CtLabel::setText(std::u16string text) {
 
 CtSize CtLabel::sizeHint(CtPaintBackend& backend) const noexcept {
     // The backend's fontMetrics is noexcept (interface contract), so no
-    // exception can cross this noexcept boundary (P2-7 ruling).
+    // exception can cross this noexcept boundary (P2-7 ruling). The
+    // style's frame contribution is added (UI5).
+    const CtStyle& s = effectiveStyle();
+    const CtSize frame = s.sizeHint(*this);
     CtPaintMetrics metrics;
     if (!backend.fontMetrics(CtFont{}, m_text, metrics))
         return CtSize{}; // backend without text support: zero hint
-    return CtSize{metrics.width, metrics.height};
+    return CtSize{metrics.width + frame.width, metrics.height + frame.height};
 }
 
-void CtLabel::paint(CtPaintBackend& backend, const CtRect& rect) const {
-    // UI4 fixed palette (UI5 wires CtStyle). The label draws its text at
-    // the top-left of `rect`; the owner (backing store / window paint
-    // pass) drives the painter session.
-    // (Deliberately NOT drawing yet: UI4 tests exercise the text storage
-    // and size hint; the paint pass lands with the UI4 window integration.
-    // Painting uses backend primitives only.)
-    (void)backend;
-    (void)rect;
+void CtLabel::paint(CtPainter& painter, const CtRect& rect) const {
+    // The label paints its text at the top-left of `rect`, colored by the
+    // style (P3: the control asks the style, never embeds style logic).
+    // The painter is owned by the backing store (WARN-2 ruling); already
+    // active with the widget-local transform.
+    const CtStyle& s = effectiveStyle();
+    painter.drawText(CtPoint{rect.x, rect.y}, m_text, CtFont{},
+                     s.textColor(*this));
 }
 
 } // namespace crisp::ui

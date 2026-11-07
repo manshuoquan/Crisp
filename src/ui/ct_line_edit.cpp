@@ -10,6 +10,11 @@
 
 #include <utility>
 
+#include "ct_paint_backend.h" // CtPaintBackend (paint surface)
+#include "ct_painter.h"       // CtPainter (begin/fillRect/drawText)
+#include "ct_style.h"         // CtStyle (paint queries)
+#include "ct_style_basic.h"   // defaultStyle() (UI5)
+
 namespace crisp::ui {
 
 std::shared_ptr<CtLineEdit> CtLineEdit::create(
@@ -100,16 +105,24 @@ void CtLineEdit::onKeyInput(const crisp::input::CtKeyPayload& payload) {
 
 void CtLineEdit::onMouseInput(const crisp::input::CtMousePayload& payload) {
     // Caret placement from the press position (widget-local). The caret
-    // is the nearest character boundary to the click x using the fixed
-    // PixelBuffer char width (kCharWidthPx). The GDI backend resolves real
-    // metrics via CtPaintBackend::fontMetrics (P2-8 fix: the caret model
-    // shares the fixed char-width constant with the PixelBuffer backend).
+    // is the nearest character boundary to the click x. The GDI backend
+    // resolves real metrics via CtPaintBackend::fontMetrics; the caret
+    // column uses the SHARED fixed char width (WARN-4) so the click-to-
+    // column math cannot drift from the backend's drawText.
     if (payload.action != crisp::input::CtMouseAction::kPress)
         return;
-    constexpr int kCharWidthPx = 8; // PixelBuffer fixed char width
-    const int col = payload.x / kCharWidthPx;
-    const std::size_t pos = col < 0 ? 0u
-                                    : static_cast<std::size_t>(col);
+    // P1-1 fix: the click x is widget-local and INCLUDES the style's left
+    // frame (padding+border) — the caret column counts TEXT characters
+    // from the text origin (textX = rect.x + frame.width/2). A click in
+    // the left padding maps to column 0 (clamped below).
+    const CtStyle& s = effectiveStyle();
+    const CtSize frame = s.sizeHint(*this);
+    const int textX = geometry().x + frame.width / 2;
+    const int clickFromText = payload.x - textX;
+    const int col = clickFromText > 0 ? clickFromText / kFixedCharWidthPx : 0;
+    const std::size_t pos =
+        col >= static_cast<int>(m_text.size()) ? m_text.size()
+                                               : static_cast<std::size_t>(col);
     setCursorPos(pos);
 }
 
@@ -147,24 +160,51 @@ void CtLineEdit::emitTextChanged() {
 }
 
 CtSize CtLineEdit::sizeHint(CtPaintBackend& backend) const noexcept {
-    // The text hint + the fixed UI4 padding (1 char each side, 1 line).
-    // P2-7 ruling: fontMetrics is noexcept (interface contract).
+    // The text hint + the style's frame contribution (UI5).
+    const CtStyle& s = effectiveStyle();
+    const CtSize frame = s.sizeHint(*this);
     CtPaintMetrics metrics;
     if (!backend.fontMetrics(CtFont{}, m_text, metrics))
         return CtSize{}; // no text support: zero hint
-    return CtSize{metrics.width + 2 * kTextWidgetPaddingPx,
-                  metrics.height};
+    return CtSize{metrics.width + frame.width, metrics.height + frame.height};
 }
 
-void CtLineEdit::paint(CtPaintBackend& backend, const CtRect& rect) const {
-    // UI4 fixed palette (UI5 wires CtStyle). The editor paints its own
-    // background + text + caret (when focused); the owner (backing store
-    // / window paint pass) drives the painter session.
-    // (Deliberately NOT drawing yet: UI4 tests exercise the editing logic
-    // and text; the paint pass lands with the UI4 window integration.
-    // Painting uses backend primitives only.)
-    (void)backend;
-    (void)rect;
+void CtLineEdit::paint(CtPainter& painter, const CtRect& rect) const {
+    // The editor paints its background + text + caret (when focused),
+    // colored by the style (P3). The painter is owned by the backing
+    // store (WARN-2 ruling); already active with the widget-local
+    // transform. The caret is a 1px vertical bar at the caret column
+    // (fixed char width from the backend metrics).
+    const CtStyle& s = effectiveStyle();
+
+    // Background + border (the editor is a framed box, like the button).
+    painter.fillRect(rect, s.backgroundColor(*this));
+    const int bw = s.borderWidth(*this);
+    if (bw > 0) {
+        const CtColor border = s.borderColor(*this);
+        painter.fillRect(CtRect{rect.x, rect.y, rect.width, bw}, border);
+        painter.fillRect(CtRect{rect.x, rect.bottom() - bw, rect.width, bw}, border);
+        painter.fillRect(CtRect{rect.x, rect.y, bw, rect.height}, border);
+        painter.fillRect(CtRect{rect.right() - bw, rect.y, bw, rect.height}, border);
+    }
+
+    // Text at the content origin (with the style's horizontal padding).
+    const CtSize frame = s.sizeHint(*this);
+    CtPaintMetrics metrics;
+    if (painter.backend()->fontMetrics(CtFont{}, m_text, metrics)) {
+        const int textX = rect.x + frame.width / 2;
+        const int textY = rect.y + (rect.height - metrics.height) / 2;
+        painter.drawText(CtPoint{textX, textY}, m_text, CtFont{},
+                         s.textColor(*this));
+
+        // Caret: 1px bar at the caret column (shared fixed char width,
+        // WARN-4 — cannot drift from the backend's drawText).
+        if (hasFocus()) {
+            const int cx = textX + static_cast<int>(m_cursor) * kFixedCharWidthPx;
+            painter.fillRect(CtRect{cx, textY, 1, metrics.height},
+                             s.textColorForState(*this, CtButtonState::kNormal));
+        }
+    }
 }
 
 } // namespace crisp::ui

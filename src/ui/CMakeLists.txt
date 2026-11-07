@@ -24,6 +24,7 @@ add_library(crisp_ui STATIC
     ct_label.cpp              # UI4: plain-text label
     ct_box_layout.cpp         # UI4: two-pass box layout
     ct_focus_chain.cpp        # UI4: explicit focus chain
+    ct_style_basic.cpp        # UI5: basic style (compile-time palette)
 )
 
 # platform layer (WARN-5: REQUIRED on Win32, README exception clause):

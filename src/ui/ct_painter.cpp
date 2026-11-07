@@ -11,7 +11,17 @@
 #include <chrono>
 #include <climits> // INT_MAX (PA2: text-length overflow guard)
 
+#include "ct_paint_types.h" // kFixedCharWidthPx / kFixedLineHeightPx (P1-2)
+
 namespace crisp::ui {
+
+namespace {
+/// The fixed glyph cell the UI2 record pipeline assumes (P1-2 fix: the
+/// painter's clip/damage math MUST agree with the PixelBuffer backend's
+/// drawText — both use the SHARED constants, so they cannot drift).
+constexpr int kTextCellWidthPx = kFixedCharWidthPx;
+constexpr int kTextCellHeightPx = kFixedLineHeightPx;
+} // namespace
 
 bool CtPainter::begin(CtPaintBackend& backend) noexcept {
     // Already active: refuse without overwriting the current session
@@ -54,7 +64,9 @@ void CtPainter::end() noexcept {
             damage.add(cmd.rect);
         else
             damage.add(CtRect{cmd.origin.x, cmd.origin.y,
-                              static_cast<int>(cmd.text.size()) * 8, 16});
+                              static_cast<int>(cmd.text.size()) *
+                                  kTextCellWidthPx,
+                              kTextCellHeightPx});
     }
     // Hand the recorded batch to the backend through the INTERFACE
     // (PA4: submitCommands — no dynamic_cast, no friend channel; any
@@ -146,15 +158,18 @@ void CtPainter::drawText(const CtPoint& origin, const std::u16string_view& text,
         return; // no-op outside a session (§14)
     const CtPoint devOrigin = translated(origin);
     // Clip against the current clip using the fixed UI2 text metrics
-    // (charWidth=8, lineHeight=16): the command is only recorded when
-    // any part of its cell falls inside the clip.
+    // (charWidth = kTextCellWidthPx, lineHeight = kTextCellHeightPx — the
+    // SHARED constants, P1-2): the command is only recorded when any part
+    // of its cell falls inside the clip.
     // PA2 (audit MUST): reject absurd text lengths BEFORE the int
-    // multiply — text.size() * 8 must fit int (device coords are int).
-    // A text wider than INT_MAX/8 pixels can never draw anyway.
-    if (text.size() > static_cast<std::size_t>(INT_MAX / 8))
+    // multiply — text.size() * kTextCellWidthPx must fit int (device
+    // coords are int). A text wider than INT_MAX/kTextCellWidthPx pixels
+    // can never draw anyway.
+    if (text.size() >
+        static_cast<std::size_t>(INT_MAX / kTextCellWidthPx))
         return; // silently reject: unbounded text is a caller bug
-    const int w = static_cast<int>(text.size()) * 8;
-    const CtRect textRect{devOrigin.x, devOrigin.y, w, 16};
+    const int w = static_cast<int>(text.size()) * kTextCellWidthPx;
+    const CtRect textRect{devOrigin.x, devOrigin.y, w, kTextCellHeightPx};
     if (clipped(textRect).isEmpty())
         return;
     CtPaintCmd cmd;

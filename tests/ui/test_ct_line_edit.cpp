@@ -122,15 +122,30 @@ TEST_CASE(lineedit_mouse_press_places_caret)
     auto edit = CtLineEdit::create(root, u"abcdefgh"); // 8 chars x 8px
     edit->setGeometry(CtRect{0, 0, 100, 20});
 
+    // UI5 (P1-1): the click x is widget-local and INCLUDES the style's
+    // left frame (padding+border). textX = rect.x + frame.width/2, with
+    // the default style frame.width = 2*8 + 2*1 = 18 → textX = 9. A click
+    // at x=9+32=41 lands on character 4 (the 5th char boundary).
     CtMousePayload press;
     press.action = CtMouseAction::kPress;
-    press.x = 32; // 4 chars in (8px/char)
+    press.x = 9 + 4 * 8; // 41: 4 chars in from the TEXT origin
     press.y = 10;
     press.button = crisp::input::CtMouseButton::kPrimary;
     CtEvent<CtMousePayload> ev(CtEventOrigin::kSystem, press);
     edit->dispatchInput(ev);
-
     EXPECT_EQ(edit->cursorPos(), 4u);
+
+    // A click in the LEFT PADDING (x=5, inside the frame) maps to column 0.
+    press.x = 5;
+    CtEvent<CtMousePayload> ev2(CtEventOrigin::kSystem, press);
+    edit->dispatchInput(ev2);
+    EXPECT_EQ(edit->cursorPos(), 0u);
+
+    // A click PAST the last character clamps to the text end (8).
+    press.x = 9 + 12 * 8; // far beyond "abcdefgh"
+    CtEvent<CtMousePayload> ev3(CtEventOrigin::kSystem, press);
+    edit->dispatchInput(ev3);
+    EXPECT_EQ(edit->cursorPos(), 8u);
 }
 
 TEST_CASE(lineedit_set_text_clamps_caret_and_emits)

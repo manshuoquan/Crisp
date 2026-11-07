@@ -37,6 +37,12 @@
 #include "ct_widget_trace.h"        // CtWidgetPhase / CtWidgetRecord / CtWidgetTrace
 
 namespace crisp::ui {
+class CtStyle; ///< fwd: widgets hold a style pointer (UI5); full definition
+               ///< lives in ct_style.h (which includes this header — the
+               ///< pointer-only member keeps the include graph acyclic).
+/// fwd: the default style (defined in ct_style_basic.h); effectiveStyle()
+/// uses it when the widget has no custom style.
+const CtStyle& defaultStyle() noexcept;
 
 /// Base class of every widget in the crisp::ui object tree.
 ///
@@ -272,6 +278,25 @@ public:
         return CtSize{};
     }
 
+    // --- UI5 style -------------------------------------------------------
+
+    /// The widget's style (nullptr = the default CtBasicStyle is used by
+    /// the widget's paint/sizeHint — see setStyle).
+    const CtStyle* style() const noexcept { return m_style; }
+
+    /// The EFFECTIVE style (the widget's, or the default when none is
+    /// set — SUGGEST-1 ruling: one shared resolution for paint/sizeHint).
+    const CtStyle& effectiveStyle() const noexcept {
+        return m_style ? *m_style : defaultStyle();
+    }
+
+    /// Set the widget's style (the widget does NOT own it — the caller
+    /// MUST keep the style alive for at least as long as the widget; a
+    /// null style reverts to the default CtBasicStyle, which is a
+    /// program-lifetime static). Thread rule: must run on the widget's
+    /// thread.
+    void setStyle(const CtStyle* style) noexcept;
+
 protected:
     // --- UI4 widget input hooks ------------------------------------------
     //
@@ -398,6 +423,9 @@ private:
     /// the const semanticDispatcher(); the registry never closes it).
     mutable std::shared_ptr<crisp::event::CtDispatcher<CtSemanticEventSet>>
         m_semanticDispatcher;
+    /// (UI5) The widget's style (NOT owned — the caller keeps it alive;
+    /// null = default CtBasicStyle).
+    const CtStyle* m_style = nullptr;
 };
 
 } // namespace crisp::ui

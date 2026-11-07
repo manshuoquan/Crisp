@@ -11,7 +11,7 @@
 |--------|---------|----------------|--------|------|
 | 事件系统 | `crisp::event` | `QCoreApplication` 事件分发 / `QEvent` / `QTimer` / `QAbstractEventDispatcher` | M1-M4 | ✅ 全部落地 |
 | 多线程 | `crisp::thread` | `QThread` / `QThreadPool` / `QFuture` / `QtConcurrent` | MT1-MT3 | ✅ 全部落地（MT4 可选未开始） |
-| UI 控件 | `crisp::ui` | `QWidget` / `QPainter` / `QStyle` / `QLayout` / QPA 平台窗口 | UI1-UI4 | ✅ UI1/UI2/UI3/UI4 落地；UI5 未开始 |
+| UI 控件 | `crisp::ui` | `QWidget` / `QPainter` / `QStyle` / `QLayout` / QPA 平台窗口 | UI1-UI5 | ✅ UI1-UI5 全部落地（UI5 样式系统完成） |
 | Qt 桥 | `crisp::event`（bridge 层） | 无（兼容层） | M3/M4 | ✅ 双跑验证通过 |
 
 **代码量**：`src/` 4 个库（event / thread / ui / bridge）+ `src/ui/platform/` 平台层 10 文件；`tests/` 21 个测试 TU；ctest **9/9** 全绿（UI4 新增 24 例）。
@@ -114,7 +114,7 @@
 | UI2 | `CtPainter` / `CtPaintBackend` / `CtPaintBackendPixelBuffer` / `CtBackingStore` | 记录式绘制 + 像素缓冲后端 + 脏区合批 |
 | UI3 | `ct_input_mapper` / `CtWin32EventSource` / `CtQtHostEventSource` / `CtPlatformWindow` / `CtPaintBackendGdi` | 平台输入全链路（双模式：Win32 原生 + Qt 宿主）+ GDI 后端 |
 | UI4 | `CtLabel` / `CtPushButton` / `CtLineEdit` / `CtBoxLayout` / `CtFocusChain` | ✅ 已落地（07 架构规范） |
-| UI5 | `CtStyle` / 声明式 UI | ⬜ 可选未开始 |
+| UI5 | `CtStyle` / `CtBasicStyle` 三原色集 + 控件绘制委托 | ✅ 已落地（08 架构规范） |
 
 ### 4.3 对比 Qt 的提升
 
@@ -182,7 +182,7 @@
 |------|--------|------|
 | `event_tests` | 39 | M1 同步 + M2 异步核心 |
 | `thread_tests` | 42 | MT1-MT3 |
-| `ui_tests` | 96 | UI1/UI2 + UI3 核心 mapper + UI4 控件/布局/焦点链（状态机全路径、stretch 余数补偿黄金用例、焦点轨迹配对） |
+| `ui_tests` | 103 | UI1/UI2 + UI3 核心 mapper + UI4 控件/布局/焦点链 + UI5 样式（状态机全路径、stretch 余数补偿黄金用例、焦点轨迹配对、同控件不同 style 像素对比） |
 | `ui3_platform_tests` | 11 | Win32 消息映射 + 双击回归 + 平台窗口 + GDI 全链路 |
 | `ui3_qt_mapper_tests` | 7 | Qt 桥映射 + 跨模式一致性 + 零分配 |
 | `qt_bridge_tests` | 30 | M3/M4 桥 + 翻译器 + 事件源 |
@@ -196,7 +196,7 @@
 
 | 里程碑 | 内容 | 状态 |
 |--------|------|------|
-| UI5 | 扩展控件 + 样式 `CtStyle` + 声明式 UI 工具 | ⬜ 可选 |
+| UI6 | 扩展控件（组合框/复选框/滚动条）+ 声明式 UI 工具 | ⬜ 可选 |
 | MT4 | work-stealing / `CtPromise<T>` | ⬜ 可选 |
 | 事件系统加固 | 对象池、flat-map、`CtOpaqueEvent` | ⬜ |
 | 控件树级完整双跑 | 同一控件树双模式收到相同载荷序列（UI4 控件已完备） | ⬜ |

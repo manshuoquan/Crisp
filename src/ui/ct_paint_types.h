@@ -26,6 +26,14 @@ struct CtColor {
     static CtColor white() noexcept { return CtColor{255, 255, 255, 255}; }
 };
 
+/// Equality: colors are equal when all four channels match.
+inline bool operator==(const CtColor& a, const CtColor& b) noexcept {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+inline bool operator!=(const CtColor& a, const CtColor& b) noexcept {
+    return !(a == b);
+}
+
 /// 2D integer point (pixel coordinates).
 struct CtPoint {
     int x = 0;
@@ -67,10 +75,10 @@ struct CtPaintMetrics {
     int height = 0; ///< line height (px)
 };
 
-/// (UI4) Fixed per-side padding (px) of the interactive text widgets'
-/// sizeHint (CtPushButton/CtLineEdit). A shared constant so the button and
-/// the editor agree (1 char per side at the PixelBuffer's 8px char width).
-/// UI5 moves this behind the style system.
-constexpr int kTextWidgetPaddingPx = 8;
+/// (UI2/UI5) The PixelBuffer backend's fixed glyph cell (WARN-4 ruling):
+/// one shared constant so the backend's drawText AND the control layer's
+/// caret/column math (CtLineEdit) agree — no duplicated magic 8/16.
+inline constexpr int kFixedCharWidthPx = 8;   ///< PixelBuffer char width
+inline constexpr int kFixedLineHeightPx = 16; ///< PixelBuffer line height
 
 } // namespace crisp::ui

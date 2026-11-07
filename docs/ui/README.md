@@ -12,7 +12,8 @@
 | 04 | [04-ui1-architecture.md](./04-ui1-architecture.md) | UI1 架构规范：对象树 + 显式状态 + 输入门禁 + 脏区 + 轨迹 |
 | 05 | [05-ui2-architecture.md](./05-ui2-architecture.md) | UI2 架构规范：绘制基元 + PixelBuffer/GDI 后端 + 脏区合批 |
 | 06 | [06-ui3-architecture.md](./06-ui3-architecture.md) | UI3 架构规范：平台窗口双模式 + 输入映射器 + 双跑对比 |
-| 07 | [07-ui4-architecture.md](./07-ui4-architecture.md) | UI4 架构规范：基础控件集 + 布局 + 焦点链（本文档，新建） |
+| 07 | [07-ui4-architecture.md](./07-ui4-architecture.md) | UI4 架构规范：基础控件集 + 布局 + 焦点链 |
+| 08 | [08-ui5-architecture.md](./08-ui5-architecture.md) | UI5 架构规范：样式系统 + 绘制委托（本文档，新建） |
 
 ## 里程碑
 
@@ -23,7 +24,8 @@
 | UI2 | 绘制基元：`CtPainter` + `CtPaintBackend`（GDI + PixelBuffer）+ 脏区合成 | ✅ 已落地 |
 | UI3 | 平台窗口双模式：Win32 原生 + Qt 宿主（复用 M3/M4 桥） | ✅ 已落地 |
 | UI4 | 基础控件集 + 布局 + 焦点链：`CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` + `CtFocusChain` | ✅ 已落地（07 架构规范） |
-| UI5 | 扩展控件 + 样式 + 声明式 UI 工具（可选） | ⬜ 可选未开始 |
+| UI5 | 样式系统：`CtStyle` 纯接口 + `CtBasicStyle` 三原色集 + 控件绘制委托 | ✅ 已落地（08 架构规范） |
+| UI6 | 扩展控件 + 声明式 UI 工具（可选） | ⬜ 可选未开始 |
 
 ## 关键咬合点
 

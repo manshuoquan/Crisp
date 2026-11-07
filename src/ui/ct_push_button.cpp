@@ -10,6 +10,11 @@
 
 #include <utility>
 
+#include "ct_paint_backend.h" // CtPaintBackend (paint surface)
+#include "ct_painter.h"       // CtPainter (begin/fillRect/drawText)
+#include "ct_style.h"         // CtStyle (paint queries)
+#include "ct_style_basic.h"   // defaultStyle() (UI5)
+
 namespace crisp::ui {
 
 std::shared_ptr<CtPushButton> CtPushButton::create(
@@ -114,26 +119,48 @@ void CtPushButton::setState(CtButtonState next) noexcept {
 }
 
 CtSize CtPushButton::sizeHint(CtPaintBackend& backend) const noexcept {
-    // The text hint + the fixed UI4 padding (2 chars each side, 1 line).
-    // The backend's font metrics resolve the text size (PixelBuffer:
-    // fixed 8x16; GDI: real metrics). UI5 wires the style's contribution.
-    // P2-7 ruling: fontMetrics is noexcept (interface contract).
+    // The text hint + the style's frame contribution (UI5): the backend's
+    // font metrics resolve the text size (PixelBuffer: fixed 8x16; GDI:
+    // real metrics); the style adds its horizontal/vertical padding.
+    const CtStyle& s = effectiveStyle();
+    const CtSize frame = s.sizeHint(*this);
     CtPaintMetrics metrics;
     if (!backend.fontMetrics(CtFont{}, m_text, metrics))
         return CtSize{}; // no text support: zero hint
-    return CtSize{metrics.width + 2 * kTextWidgetPaddingPx,
-                  metrics.height};
+    return CtSize{metrics.width + frame.width, metrics.height + frame.height};
 }
 
-void CtPushButton::paint(CtPaintBackend& backend, const CtRect& rect) const {
-    // UI4 fixed palette (UI5 wires CtStyle). The button paints its own
-    // background + centered text; the owner (backing store / window paint
-    // pass) drives the painter session.
-    // (Deliberately NOT drawing yet: UI4 tests exercise the state machine
-    // and text/size hint; the paint pass lands with the UI4 window
-    // integration. Painting uses backend primitives only.)
-    (void)backend;
-    (void)rect;
+void CtPushButton::paint(CtPainter& painter, const CtRect& rect) const {
+    // The button paints ITS OWN surface by ASKING the style (P3: the
+    // control never embeds style logic — the style decides the palette,
+    // the painter records the primitives). The painter is owned by the
+    // backing store (WARN-2 ruling: no 0.5MB record buffer on the control
+    // call stack); it is ALREADY active with the widget-local transform.
+    const CtStyle& s = effectiveStyle();
+
+    // Background fill (the border region is drawn over it — WARN-1: the
+    // style hint reserves the border so the box fits).
+    painter.fillRect(rect, s.backgroundColor(*this));
+
+    // Border (style borderWidth > 0): four edge rects inside `rect`.
+    const int bw = s.borderWidth(*this);
+    if (bw > 0) {
+        const CtColor border = s.borderColor(*this);
+        painter.fillRect(CtRect{rect.x, rect.y, rect.width, bw}, border); // top
+        painter.fillRect(CtRect{rect.x, rect.bottom() - bw, rect.width, bw}, border); // bottom
+        painter.fillRect(CtRect{rect.x, rect.y, bw, rect.height}, border); // left
+        painter.fillRect(CtRect{rect.right() - bw, rect.y, bw, rect.height}, border); // right
+    }
+
+    // Text: centered in the content rect (the style's text color per
+    // state). The backend's font metrics give the text extent.
+    CtPaintMetrics metrics;
+    if (painter.backend()->fontMetrics(CtFont{}, m_text, metrics)) {
+        const int tx = rect.x + (rect.width - metrics.width) / 2;
+        const int ty = rect.y + (rect.height - metrics.height) / 2;
+        painter.drawText(CtPoint{tx, ty}, m_text, CtFont{},
+                         s.textColorForState(*this, m_buttonState));
+    }
 }
 
 } // namespace crisp::ui

@@ -12,9 +12,11 @@
 #include <memory>
 #include <string>
 
+#include "ct_button_state.h" // CtButtonState (shared with the style, UI5)
 #include "ct_widget_base.h"
 
 namespace crisp::ui {
+class CtPainter; ///< fwd: paint() takes the owner-provided painter (UI5)
 
 /// (UI4) Push-button state machine — EXPLICIT states instead of Qt's
 /// entangled style+widget logic (pain points P3/P8). Hover/double-click
@@ -22,12 +24,9 @@ namespace crisp::ui {
 class CtPushButton : public CtWidgetBase {
 public:
     /// The explicit state (pressed is a state, not a paint-time guess).
-    enum class CtButtonState : std::uint8_t {
-        kNormal,   ///< idle
-        kHovered,  ///< pointer inside, not pressed
-        kPressed,  ///< pointer inside AND pressed (arm)
-        kDisabled, ///< setEnabled(false)
-    };
+    /// The enum lives in ct_button_state.h (shared with CtStyle — WARN-6
+    /// ruling: the style contract must not include this control's header).
+    using CtButtonState = crisp::ui::CtButtonState;
 
     /// Sanctioned factory (P5): create a button attached to `parent`.
     static std::shared_ptr<CtPushButton> create(
@@ -68,6 +67,15 @@ public:
     /// style's sizeHint contribution).
     CtSize sizeHint(CtPaintBackend& backend) const noexcept override;
 
+    /// Paint the button into `painter` within `rect` (widget-local).
+    /// The button ASKS the style for the palette (UI5); fills the
+    /// background, draws the border and the centered text. The painter is
+    /// PROVIDED by the owner (backing store / window paint pass — it owns
+    /// the record buffer, WARN-2 ruling: no 0.5MB painter on the control
+    /// call stack). `painter` must be active (begin() already called) with
+    /// the widget-local transform; `rect` is the widget's bounds.
+    void paint(CtPainter& painter, const CtRect& rect) const;
+
 protected:
     /// (UI4) The button's own mouse-input hook: runs the explicit state
     /// machine (press/move/release → kNormal/kHovered/kPressed) and
@@ -75,13 +83,6 @@ protected:
     /// press+release inside the button. Protected (P2-3 fix): input hooks
     /// are internal; the public entry is CtWidgetBase::dispatchInput.
     void onMouseInput(const crisp::input::CtMousePayload& payload) override;
-
-    /// Paint the button into `backend` within `rect` (widget-local).
-    /// The button ASKS the style for the palette (UI5 wires CtStyle; UI4
-    /// paints the fixed default palette). Fills the background, draws the
-    /// text centered. Called by the owner (CtBackingStore / UI4 window
-    /// paint pass) on the UI thread.
-    void paint(CtPaintBackend& backend, const CtRect& rect) const;
 
 private:
     /// Transition the explicit state; marks damage on change.

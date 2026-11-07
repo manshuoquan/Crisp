@@ -14,6 +14,7 @@
 #include "ct_widget_base.h"
 
 namespace crisp::ui {
+class CtPainter; ///< fwd: paint() takes the owner-provided painter (UI5)
 
 /// (UI4) Plain-text label. NO rich text (QTextDocument is out of scope,
 /// pain point P10): a single line of u16 text, drawn via the backend's
@@ -38,10 +39,12 @@ public:
     /// explicit relayout() after a setText).
     void setText(std::u16string text);
 
-    /// (UI4) Paint the label into `backend` within `rect` (widget-local):
-    /// the text at the top-left of `rect` (single line). UI4 fixed color
-    /// (UI5 wires the style). Called by the owner on the UI thread.
-    void paint(CtPaintBackend& backend, const CtRect& rect) const;
+    /// (UI4) Paint the label into `painter` within `rect` (widget-local):
+    /// the text at the top-left of `rect` (single line), colored by the
+    /// style. The painter is PROVIDED by the owner (backing store —
+    /// WARN-2 ruling, see CtPushButton::paint). `painter` must be active
+    /// with the widget-local transform.
+    void paint(CtPainter& painter, const CtRect& rect) const;
 
     /// (UI4) Preferred size: the backend's font metrics for the current
     /// text (one measure pass). Zero if the backend has no text support.

@@ -16,6 +16,7 @@
 #include "ct_widget_base.h"
 
 namespace crisp::ui {
+class CtPainter; ///< fwd: paint() takes the owner-provided painter (UI5)
 
 /// (UI4) Single-line text editor. Explicit states + a small undo-free text
 /// buffer; cursor blink driven by CtTimerEventSource (UI3 loop).
@@ -55,6 +56,13 @@ public:
     /// style's sizeHint contribution).
     CtSize sizeHint(CtPaintBackend& backend) const noexcept override;
 
+    /// Paint the editor into `painter` within `rect` (widget-local).
+    /// UI5 paints the style palette (background + border + text + caret
+    /// when focused). The painter is PROVIDED by the owner (backing
+    /// store — WARN-2 ruling, see CtPushButton::paint). `painter` must be
+    /// active with the widget-local transform.
+    void paint(CtPainter& painter, const CtRect& rect) const;
+
 protected:
     /// (UI4) The editor's key-input hook: editing keys (text input /
     /// backspace / delete / arrows / home / end) mutate the buffer and
@@ -67,12 +75,6 @@ protected:
     /// (character index from the backend's fixed-width font metrics; the
     /// GDI backend resolves real metrics — see CtPaintBackend::fontMetrics).
     void onMouseInput(const crisp::input::CtMousePayload& payload) override;
-
-    /// Paint the editor into `backend` within `rect` (widget-local).
-    /// UI4 paints the fixed default palette (background + text + caret
-    /// when focused); UI5 wires the style. Called by the owner on the UI
-    /// thread.
-    void paint(CtPaintBackend& backend, const CtRect& rect) const;
 
 private:
     /// Insert `text` at the caret (advances the caret); emits the

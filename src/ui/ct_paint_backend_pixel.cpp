@@ -11,6 +11,7 @@
 #include <cassert>
 
 #include "ct_paint_cmd.h"  // CtPaintCmd / CtPaintCmdType
+#include "ct_paint_types.h" // kFixedCharWidthPx / kFixedLineHeightPx (WARN-4)
 
 namespace crisp::ui {
 
@@ -20,8 +21,10 @@ namespace {
 /// docs/ui/05-ui2-architecture.md §3.4): char width 8px, line height 16px,
 /// advance width = text.size() x 8. Pinned for offline test assertions;
 /// the GDI backend reports real metrics (GetTextExtentPoint32W).
-constexpr int kCharWidth = 8;
-constexpr int kLineHeight = 16;
+/// WARN-4 fix: the values come from the SHARED constants so the control
+/// layer's caret math (CtLineEdit) cannot drift from the backend.
+constexpr int kCharWidth = kFixedCharWidthPx;
+constexpr int kLineHeight = kFixedLineHeightPx;
 
 } // namespace
 

@@ -1,7 +1,7 @@
 # CRISP
 
 > 用现代 C++（C++17）逐步替代 Qt 模块的自研 GUI/应用框架。
-> 当前阶段：**事件系统**（M1-M4 ✅）+ **多线程子系统**（MT1-MT3 ✅）+ **UI 控件子系统**（UI1-UI4 ✅）。
+> 当前阶段：**事件系统**（M1-M4 ✅）+ **多线程子系统**（MT1-MT3 ✅）+ **UI 控件子系统**（UI1-UI5 ✅）。
 > 现状总览：[docs/status.md](docs/status.md)
 
 ---
@@ -12,7 +12,7 @@ CRISP 的目标是用**纯标准 C++17** 逐步替代 Qt 的各个模块，摆�
 
 1. **事件系统**（`crisp::event`）——替代 Qt 的 `QCoreApplication` 事件分发部分（M1-M4 完成，含 Qt 桥与双跑验证）。
 2. **多线程子系统**（`crisp::thread`）——替代 Qt 的 `QThread`/`QThreadPool`/`QFuture`/`QtConcurrent`（MT1-MT3 完成：线程生命周期、线程池、强类型任务、可取消 Future、线程→事件回传桥、并行算法）。
-3. **UI 控件子系统**（`crisp::ui`）——替代 Qt 的 `QWidget`/`QPainter`/`QStyle`/`QLayout`/QPA（UI1 对象树 + 脏区 + 轨迹 ✅、UI2 绘制基元 + PixelBuffer 后端 ✅、UI3 平台窗口双模式 + 输入全链路 + GDI 后端 ✅、UI4 基础控件集 `CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` 布局 + `CtFocusChain` 焦点链 ✅）。
+3. **UI 控件子系统**（`crisp::ui`）——替代 Qt 的 `QWidget`/`QPainter`/`QStyle`/`QLayout`/QPA（UI1 对象树 + 脏区 + 轨迹 ✅、UI2 绘制基元 + PixelBuffer 后端 ✅、UI3 平台窗口双模式 + 输入全链路 + GDI 后端 ✅、UI4 基础控件集 `CtLabel`/`CtPushButton`/`CtLineEdit` + `CtBoxLayout` 布局 + `CtFocusChain` 焦点链 ✅、UI5 样式系统 `CtStyle`/`CtBasicStyle` 三原色集 + 控件绘制委托 ✅）。
 
 设计文档：`docs/event-system/`（01 调研 → 02 痛点 → 03 重写方案 → 04 重设计规范）、`docs/threading/`（01 架构调研 → 02 痛点 → 03 重写方案）、`docs/ui/`（01 调研 → 02 痛点 → 03 重写方案 → 04/05/06 里程碑规范）。
 
@@ -69,7 +69,7 @@ ctest --test-dir build --output-on-failure
 .\build\tests\bridge\bridge_tests.exe
 ```
 
-当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ UI 子系统（ui_tests 96 例含 UI4 控件/布局/焦点链 + ui3_platform 11 + ui3_qt_mapper 7）+ Qt 桥 30 例 + dual 双跑字节比对（ctest 9/9 全绿）。
+当前测试全绿：event 核心 39 例 + thread 多线程 42 例（MT1-MT3）+ UI 子系统（ui_tests 103 例含 UI4 控件/布局/焦点链 + UI5 样式 + ui3_platform 11 + ui3_qt_mapper 7）+ Qt 桥 30 例 + dual 双跑字节比对（ctest 9/9 全绿）。
 
 ### 3.4 运行示例
 
